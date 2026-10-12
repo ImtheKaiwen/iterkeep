@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist/config",
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["forge.config.ts", "vite.*.config.ts"]
+}

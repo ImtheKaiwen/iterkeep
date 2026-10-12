@@ -1,0 +1,57 @@
+{
+  "name": "iterkeep-repo",
+  "version": "0.0.0-development",
+  "private": true,
+  "description": "Local-first iteration and knowledge workspace",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=10 <12"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace=@iterkeep/desktop run dev",
+    "build": "tsc -b && npm --workspace=@iterkeep/desktop run build",
+    "make": "npm --workspace=@iterkeep/desktop run make",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint . --max-warnings=0",
+    "lint:boundaries": "node scripts/check-import-boundaries.mjs && node scripts/check-package-graph.mjs",
+    "format:check": "prettier --check .",
+    "format:write": "prettier --write .",
+    "test": "vitest run tests/integration/tooling",
+    "test:e2e": "playwright test",
+    "test:integration": "vitest run tests/integration",
+    "test:resilience": "vitest run tests/resilience",
+    "test:security": "vitest run tests/security",
+    "test:performance": "node tests/performance/run-benchmarks.mjs",
+    "verify:docs": "node scripts/verify-doc-links.mjs",
+    "verify:artifact": "node scripts/verify-artifact-layout.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run lint:boundaries && npm test && npm run verify:docs"
+  },
+  "devDependencies": {
+    "@babel/parser": "8.0.7",
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "7.11.2",
+    "@electron-forge/plugin-vite": "7.11.2",
+    "@electron-forge/shared-types": "7.11.2",
+    "@eslint/js": "9.39.2",
+    "@playwright/test": "1.64.0",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "44.7.0",
+    "eslint": "9.39.2",
+    "globals": "17.3.0",
+    "prettier": "3.8.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}
