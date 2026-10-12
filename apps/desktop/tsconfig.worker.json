@@ -9,5 +9,8 @@
     "types": ["node"]
   },
   "include": ["src/workers/**/*.ts"],
-  "references": [{ "path": "../../packages/storage-sqlite" }]
+  "references": [
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/storage-sqlite" }
+  ]
 }
