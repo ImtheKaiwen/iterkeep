@@ -22,7 +22,7 @@
     "lint:boundaries": "node scripts/check-import-boundaries.mjs && node scripts/check-package-graph.mjs",
     "format:check": "prettier --check .",
     "format:write": "prettier --write .",
-    "test": "vitest run tests/integration/tooling tests/integration/contracts tests/integration/storage",
+    "test": "vitest run tests/integration/tooling tests/integration/contracts tests/integration/storage tests/integration/application",
     "test:e2e": "playwright test",
     "test:integration": "vitest run tests/integration",
     "test:resilience": "vitest run tests/resilience",

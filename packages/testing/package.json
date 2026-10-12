@@ -13,6 +13,7 @@
     "dist"
   ],
   "dependencies": {
+    "@iterkeep/application": "0.1.0",
     "@iterkeep/contracts": "0.1.0",
     "@iterkeep/domain": "0.1.0"
   }

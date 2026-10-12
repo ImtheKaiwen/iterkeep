@@ -14,4 +14,5 @@ export * from './operations/transaction.js';
 export * from './repositories/event.repository.js';
 export * from './repositories/idempotency.repository.js';
 export * from './repositories/task.repository.js';
+export * from './repositories/core.repository.js';
 export * from './repositories/workspace.repository.js';

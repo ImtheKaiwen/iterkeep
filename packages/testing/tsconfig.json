@@ -2,5 +2,9 @@
   "extends": "../tsconfig.package.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src" },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../contracts" }, { "path": "../domain" }]
+  "references": [
+    { "path": "../application" },
+    { "path": "../contracts" },
+    { "path": "../domain" }
+  ]
 }
