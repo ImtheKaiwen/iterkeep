@@ -9,6 +9,11 @@ const sourceExtensions = new Set(['.ts', '.tsx', '.mts', '.cts']);
 
 const forbiddenByArea = [
   {
+    area: 'native SQLite ownership',
+    match: (file) => !file.includes('/packages/storage-sqlite/'),
+    forbidden: [/^better-sqlite3$/],
+  },
+  {
     area: 'renderer',
     match: (file) => file.includes('/apps/desktop/src/renderer/'),
     forbidden: [

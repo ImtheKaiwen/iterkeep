@@ -10,10 +10,12 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "migrations"
   ],
   "dependencies": {
     "@iterkeep/application": "0.1.0",
-    "@iterkeep/domain": "0.1.0"
+    "@iterkeep/domain": "0.1.0",
+    "better-sqlite3": "13.0.3"
   }
 }

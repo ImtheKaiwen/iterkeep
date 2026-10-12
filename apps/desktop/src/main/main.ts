@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
+import {
+  getNativeSmokeRunId,
+  runPackagedNativeSmoke,
+} from './native-smoke-mode.js';
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -11,7 +15,7 @@ function createMainWindow(): BrowserWindow {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       sandbox: true,
     },
     width: 1280,
@@ -33,7 +37,22 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  const smokeRunId = getNativeSmokeRunId(process.argv);
+  if (smokeRunId) {
+    try {
+      await runPackagedNativeSmoke(
+        smokeRunId,
+        process.resourcesPath,
+        path.join(__dirname, 'db.worker.cjs'),
+      );
+      app.exit(0);
+    } catch (error) {
+      console.error(error);
+      app.exit(1);
+    }
+    return;
+  }
   createMainWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

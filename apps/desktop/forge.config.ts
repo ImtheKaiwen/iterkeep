@@ -5,16 +5,18 @@ import { VitePlugin } from '@electron-forge/plugin-vite';
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: true,
+    asar: { unpack: '**/*.node' },
+    extraResource: ['../../packages/storage-sqlite/migrations'],
     name: 'Iterkeep',
   },
-  makers: [new MakerSquirrel({})],
+  makers: [new MakerSquirrel({ exe: 'Iterkeep.exe', name: 'iterkeep' })],
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
       build: [
         { entry: 'src/main/main.ts', config: 'vite.main.config.ts' },
         { entry: 'src/preload/preload.ts', config: 'vite.preload.config.ts' },
+        { entry: 'src/workers/db.worker.ts', config: 'vite.worker.config.ts' },
       ],
       renderer: [
         {

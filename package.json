@@ -15,7 +15,8 @@
   "scripts": {
     "dev": "npm --workspace=@iterkeep/desktop run dev",
     "build": "tsc -b && npm --workspace=@iterkeep/desktop run build",
-    "make": "npm --workspace=@iterkeep/desktop run make",
+    "make": "tsc -b && npm --workspace=@iterkeep/desktop run make",
+    "native:smoke": "node scripts/native-smoke.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",
     "lint:boundaries": "node scripts/check-import-boundaries.mjs && node scripts/check-package-graph.mjs",
@@ -41,6 +42,7 @@
     "@eslint/js": "9.39.2",
     "@playwright/test": "1.64.0",
     "@types/node": "24.10.1",
+    "@types/better-sqlite3": "9.6.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.1.2",

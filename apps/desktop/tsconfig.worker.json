@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist/workers",
+    "rootDir": "src/workers",
+    "types": ["node"]
+  },
+  "include": ["src/workers/**/*.ts"],
+  "references": [{ "path": "../../packages/storage-sqlite" }]
+}
