@@ -35,6 +35,7 @@ function requestIdFrom(raw: unknown): string {
 
 function errorCode(error: unknown): string {
   if (!(error instanceof Error)) return 'INTERNAL_ERROR';
+  if (knownCodes.has(error.message)) return error.message;
   const direct: Record<string, string> = {
     'permission.denied': 'PERMISSION_DENIED',
     'validation.failed': 'VALIDATION_FAILED',

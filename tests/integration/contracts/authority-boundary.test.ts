@@ -1,6 +1,8 @@
 import {
   ApiErrorSchema,
+  PROJECT_ROUTES,
   ProjectCreateRequest,
+  TASK_ROUTES,
   SafeDetailsSchema,
   TaskCreateRequest,
   TtsSidecarEventSchema,
@@ -45,6 +47,51 @@ describe('IP-03 trust-boundary schemas', () => {
         payload: {
           name: 'Project',
           idempotencyKey: requestMeta.idempotencyKey,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates project and task route envelopes and responses strictly', () => {
+    const projectId = '3ba16859-283e-4b9b-b72e-2b2908f50f33';
+    expect(
+      PROJECT_ROUTES.changeStatus.request.safeParse({
+        ...requestMeta,
+        payload: { projectId, status: 'paused', expectedRevision: 2 },
+      }).success,
+    ).toBe(true);
+    expect(
+      TASK_ROUTES.move.request.safeParse({
+        ...requestMeta,
+        payload: {
+          taskId: '8cdd67c5-99d4-4d61-9f32-991442568770',
+          projectId,
+          expectedRevision: 3,
+          sortOrder: 1,
+          actor: 'forged',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      PROJECT_ROUTES.get.response.safeParse({
+        ok: true,
+        data: {
+          id: projectId,
+          workspaceId: 'cb82d16f-9633-408f-9430-519d7f887663',
+          kind: 'user',
+          name: 'Project',
+          description: '',
+          status: 'active',
+          priority: 'none',
+          tagIds: [],
+          revision: 1,
+          deletedAt: null,
+          secret: true,
+        },
+        meta: {
+          requestId: requestMeta.requestId,
+          serverTime: '2026-10-13T00:00:00.000Z',
+          protocolVersion: 1,
         },
       }).success,
     ).toBe(false);

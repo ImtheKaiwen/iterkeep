@@ -76,6 +76,7 @@ describe('IP-04 DB worker runtime', () => {
             description: '',
             slug: 'core-rpc-project',
             priority: 'none',
+            tagIds: [],
             context: {
               actorKind: 'user',
               actorRef: 'local-user',

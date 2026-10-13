@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SETUP_ROUTES } from '@iterkeep/contracts';
+import { PROJECT_ROUTES, SETUP_ROUTES, TASK_ROUTES } from '@iterkeep/contracts';
 import {
   IpcRateLimiter,
   measureStructuredValue,
@@ -7,7 +7,11 @@ import {
 
 describe('IPC gateway guards', () => {
   it('uses versioned, statically named channels', () => {
-    const channels = Object.values(SETUP_ROUTES).map((route) => route.channel);
+    const channels = [
+      ...Object.values(SETUP_ROUTES),
+      ...Object.values(PROJECT_ROUTES),
+      ...Object.values(TASK_ROUTES),
+    ].map((route) => route.channel);
     expect(new Set(channels).size).toBe(channels.length);
     expect(
       channels.every((channel) => channel.startsWith('iterkeep:v1:')),

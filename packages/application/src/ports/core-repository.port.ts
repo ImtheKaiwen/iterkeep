@@ -42,6 +42,7 @@ export interface ProjectSnapshot {
   readonly description: string;
   readonly status: ProjectStatus;
   readonly priority: Priority;
+  readonly tagIds: readonly string[];
   readonly revision: number;
   readonly deletedAt: string | null;
 }
@@ -73,6 +74,7 @@ export interface TaskSnapshot {
   readonly completedAt: string | null;
   readonly sortOrder: number;
   readonly blockedReason: string | null;
+  readonly tagIds: readonly string[];
   readonly revision: number;
   readonly deletedAt: string | null;
 }
@@ -119,6 +121,7 @@ export interface CoreRepositoryPort {
     description: string;
     slug: string;
     priority: Priority;
+    tagIds: readonly string[];
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
@@ -127,7 +130,12 @@ export interface CoreRepositoryPort {
     eventId: string;
     receiptId: string;
     expectedRevision: number;
-    patch: { name?: string; description?: string; priority?: Priority };
+    patch: {
+      name?: string;
+      description?: string;
+      priority?: Priority;
+      tagIds?: readonly string[];
+    };
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
@@ -150,6 +158,7 @@ export interface CoreRepositoryPort {
     bodyMarkdown: string;
     priority: Priority;
     dueDate: string | null;
+    tagIds: readonly string[];
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
@@ -165,6 +174,7 @@ export interface CoreRepositoryPort {
       priority?: Priority;
       dueDate?: string | null;
       blockedReason?: string | null;
+      tagIds?: readonly string[];
     };
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;

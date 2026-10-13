@@ -106,6 +106,16 @@ function normalizedDate(value: string | null): string | null {
   return value;
 }
 
+function normalizedTagIds(
+  value: readonly string[] | undefined,
+): readonly string[] {
+  if (!value) return [];
+  if (value.length > 30 || new Set(value).size !== value.length) {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+  return [...value];
+}
+
 function optionalMarkdown<Key extends string>(
   key: Key,
   value: string | undefined,
@@ -161,6 +171,7 @@ export class ApplicationCore {
       name: string;
       description?: string;
       priority?: Priority;
+      tagIds?: readonly string[];
     },
     commandContext: CommandContext,
   ): Promise<RevisionReceipt> {
@@ -168,6 +179,7 @@ export class ApplicationCore {
       name: normalizedRequired(input.name, 120),
       description: normalizedMarkdown(input.description ?? '', 2_000),
       priority: input.priority ?? 'none',
+      tagIds: normalizedTagIds(input.tagIds),
     };
     const workspace = await this.ports.repository.getWorkspace();
     return this.ports.repository.createProject({
@@ -185,7 +197,12 @@ export class ApplicationCore {
     input: {
       projectId: string;
       expectedRevision: number;
-      patch: { name?: string; description?: string; priority?: Priority };
+      patch: {
+        name?: string;
+        description?: string;
+        priority?: Priority;
+        tagIds?: readonly string[];
+      };
     },
     commandContext: CommandContext,
   ): Promise<RevisionReceipt> {
@@ -203,6 +220,9 @@ export class ApplicationCore {
       ...(input.patch.priority === undefined
         ? {}
         : { priority: input.patch.priority }),
+      ...(input.patch.tagIds === undefined
+        ? {}
+        : { tagIds: normalizedTagIds(input.patch.tagIds) }),
     };
     if (Object.keys(patch).length === 0)
       throw new ApplicationError('VALIDATION_FAILED');
@@ -250,6 +270,7 @@ export class ApplicationCore {
       bodyMarkdown?: string;
       priority?: Priority;
       dueDate?: string | null;
+      tagIds?: readonly string[];
     },
     commandContext: CommandContext,
   ): Promise<RevisionReceipt> {
@@ -265,6 +286,7 @@ export class ApplicationCore {
       ),
       priority: input.priority ?? 'none',
       dueDate: normalizedDate(input.dueDate ?? null),
+      tagIds: normalizedTagIds(input.tagIds),
     };
     return this.ports.repository.createTask({
       id: this.ports.ids.next(),
@@ -286,6 +308,7 @@ export class ApplicationCore {
         priority?: Priority;
         dueDate?: string | null;
         blockedReason?: string | null;
+        tagIds?: readonly string[];
       };
     },
     commandContext: CommandContext,
@@ -316,6 +339,9 @@ export class ApplicationCore {
                 ? null
                 : normalizedMarkdown(input.patch.blockedReason, 2_000),
           }),
+      ...(input.patch.tagIds === undefined
+        ? {}
+        : { tagIds: normalizedTagIds(input.patch.tagIds) }),
     };
     if (Object.keys(patch).length === 0)
       throw new ApplicationError('VALIDATION_FAILED');

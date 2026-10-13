@@ -40,6 +40,10 @@ const RepositoryIdentitySchema = z.strictObject({
   eventId: z.string().uuid(),
   receiptId: z.string().uuid(),
 });
+const RepositoryTagIdsSchema = z
+  .array(TagIdSchema)
+  .max(30)
+  .refine((ids) => new Set(ids).size === ids.length);
 
 function request<Operation extends string, Payload extends z.ZodType>(
   op: Operation,
@@ -93,6 +97,7 @@ export const CoreRepositoryDbRequestSchema = request(
         description: z.string().max(2_000),
         slug: z.string().min(1).max(160),
         priority: PrioritySchema,
+        tagIds: RepositoryTagIdsSchema,
         context: RepositoryContextSchema,
       }),
     }),
@@ -107,6 +112,7 @@ export const CoreRepositoryDbRequestSchema = request(
           name: z.string().min(1).max(120).optional(),
           description: z.string().max(2_000).optional(),
           priority: PrioritySchema.optional(),
+          tagIds: RepositoryTagIdsSchema.optional(),
         }),
         context: RepositoryContextSchema,
       }),
@@ -142,6 +148,7 @@ export const CoreRepositoryDbRequestSchema = request(
         bodyMarkdown: MarkdownSchema,
         priority: PrioritySchema,
         dueDate: LocalDateSchema.nullable(),
+        tagIds: RepositoryTagIdsSchema,
         context: RepositoryContextSchema,
       }),
     }),
@@ -159,6 +166,7 @@ export const CoreRepositoryDbRequestSchema = request(
           priority: PrioritySchema.optional(),
           dueDate: LocalDateSchema.nullable().optional(),
           blockedReason: z.string().max(2_000).nullable().optional(),
+          tagIds: RepositoryTagIdsSchema.optional(),
         }),
         context: RepositoryContextSchema,
       }),

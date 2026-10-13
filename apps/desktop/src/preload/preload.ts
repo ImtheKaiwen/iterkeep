@@ -1,12 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { SETUP_ROUTES } from '@iterkeep/contracts';
+import { PROJECT_ROUTES, SETUP_ROUTES, TASK_ROUTES } from '@iterkeep/contracts';
 
-async function invoke(
-  route: (typeof SETUP_ROUTES)[keyof typeof SETUP_ROUTES],
-  payload: unknown,
-  mutation = false,
-) {
+interface Route {
+  readonly channel: `iterkeep:v1:${string}`;
+  readonly response: { parse(value: unknown): unknown };
+}
+
+async function invoke(route: Route, payload: unknown, mutation = false) {
   const requestId = randomUUID();
   const result = await ipcRenderer.invoke(route.channel, {
     protocolVersion: 1,
@@ -14,7 +15,9 @@ async function invoke(
     ...(mutation ? { idempotencyKey: randomUUID() } : {}),
     payload,
   });
-  const parsed = route.response.parse(result);
+  const parsed = route.response.parse(result) as
+    | { ok: true; data: unknown }
+    | { ok: false; error: { messageKey: string } };
   if (!parsed.ok) throw new Error(parsed.error.messageKey);
   return parsed.data;
 }
@@ -33,5 +36,24 @@ contextBridge.exposeInMainWorld('iterkeep', {
       invoke(SETUP_ROUTES.setupSaveStep, input, true),
     complete: (input: unknown) =>
       invoke(SETUP_ROUTES.setupComplete, input, true),
+  },
+  projects: {
+    get: (projectId: string) => invoke(PROJECT_ROUTES.get, { projectId }),
+    create: (input: unknown) => invoke(PROJECT_ROUTES.create, input, true),
+    update: (input: unknown) => invoke(PROJECT_ROUTES.update, input, true),
+    changeStatus: (input: unknown) =>
+      invoke(PROJECT_ROUTES.changeStatus, input, true),
+    trash: (input: unknown) => invoke(PROJECT_ROUTES.trash, input, true),
+    restore: (input: unknown) => invoke(PROJECT_ROUTES.restore, input, true),
+  },
+  tasks: {
+    get: (taskId: string) => invoke(TASK_ROUTES.get, { taskId }),
+    create: (input: unknown) => invoke(TASK_ROUTES.create, input, true),
+    update: (input: unknown) => invoke(TASK_ROUTES.update, input, true),
+    changeStatus: (input: unknown) =>
+      invoke(TASK_ROUTES.changeStatus, input, true),
+    move: (input: unknown) => invoke(TASK_ROUTES.move, input, true),
+    trash: (input: unknown) => invoke(TASK_ROUTES.trash, input, true),
+    restore: (input: unknown) => invoke(TASK_ROUTES.restore, input, true),
   },
 });

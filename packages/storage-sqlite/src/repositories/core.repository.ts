@@ -80,6 +80,43 @@ function assertProjectWritable(db: Database.Database, projectId: string): void {
   }
 }
 
+function tagIds(
+  db: Database.Database,
+  table: 'project_tags' | 'task_tags',
+  ownerColumn: 'project_id' | 'task_id',
+  ownerId: string,
+): readonly string[] {
+  return db
+    .prepare<[string], { tag_id: string }>(
+      `SELECT tag_id FROM ${table} WHERE ${ownerColumn}=? ORDER BY tag_id`,
+    )
+    .all(ownerId)
+    .map((row) => row.tag_id);
+}
+
+function replaceTagLinks(
+  db: Database.Database,
+  table: 'project_tags' | 'task_tags',
+  ownerColumn: 'project_id' | 'task_id',
+  ownerId: string,
+  workspaceId: string,
+  nextTagIds: readonly string[],
+): void {
+  const findTag = db.prepare<[string], { workspace_id: string }>(
+    'SELECT workspace_id FROM tags WHERE id=?',
+  );
+  for (const tagId of nextTagIds) {
+    if (findTag.get(tagId)?.workspace_id !== workspaceId) {
+      throw new ApplicationError('REFERENTIAL_INTEGRITY');
+    }
+  }
+  db.prepare(`DELETE FROM ${table} WHERE ${ownerColumn}=?`).run(ownerId);
+  const insert = db.prepare(
+    `INSERT INTO ${table}(${ownerColumn},tag_id) VALUES (?,?)`,
+  );
+  for (const tagId of nextTagIds) insert.run(ownerId, tagId);
+}
+
 interface DocumentRow {
   readonly id: string;
   readonly project_id: string;
@@ -205,6 +242,7 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           description: row.description,
           status: row.status,
           priority: row.priority,
+          tagIds: tagIds(this.db, 'project_tags', 'project_id', row.id),
           revision: row.revision,
           deletedAt: row.deleted_at,
         }
@@ -252,6 +290,7 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
             completedAt: row.completed_at,
             sortOrder: row.sort_order,
             blockedReason: row.blocked_reason,
+            tagIds: tagIds(this.db, 'task_tags', 'task_id', row.id),
             revision: row.revision,
             deletedAt: row.deleted_at,
           }
@@ -363,6 +402,14 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           input.context.now,
           input.context.now,
         );
+      replaceTagLinks(
+        this.db,
+        'project_tags',
+        'project_id',
+        input.id,
+        input.workspaceId,
+        input.tagIds,
+      );
       appendEvent(this.db, {
         id: input.eventId,
         type: 'project.created',
@@ -399,9 +446,10 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
             status: ProjectSnapshot['status'];
             revision: number;
             deleted_at: string | null;
+            workspace_id: string;
           }
         >(
-          'SELECT kind,name,description,priority,status,revision,deleted_at FROM projects WHERE id=?',
+          'SELECT kind,name,description,priority,status,revision,deleted_at,workspace_id FROM projects WHERE id=?',
         )
         .get(input.projectId);
       if (!current || current.deleted_at !== null)
@@ -415,10 +463,18 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
       const name = input.patch.name ?? current.name;
       const description = input.patch.description ?? current.description;
       const priority = input.patch.priority ?? current.priority;
+      const currentTagIds = tagIds(
+        this.db,
+        'project_tags',
+        'project_id',
+        input.projectId,
+      );
+      const nextTagIds = input.patch.tagIds ?? currentTagIds;
       const changed =
         name !== current.name ||
         description !== current.description ||
-        priority !== current.priority;
+        priority !== current.priority ||
+        nextTagIds.join('\0') !== currentTagIds.join('\0');
       const revision = changed ? current.revision + 1 : current.revision;
       if (changed) {
         const update = this.db
@@ -436,6 +492,14 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           );
         if (update.changes !== 1)
           throw new ApplicationError('CONFLICT_REVISION');
+        replaceTagLinks(
+          this.db,
+          'project_tags',
+          'project_id',
+          input.projectId,
+          current.workspace_id,
+          nextTagIds,
+        );
         appendEvent(this.db, {
           id: input.eventId,
           type: 'project.updated',
@@ -559,6 +623,21 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           input.context.now,
           input.context.now,
         );
+      const taskWorkspace = this.db
+        .prepare<
+          [string],
+          { workspace_id: string }
+        >('SELECT workspace_id FROM projects WHERE id=?')
+        .get(input.projectId);
+      if (!taskWorkspace) throw new ApplicationError('REFERENTIAL_INTEGRITY');
+      replaceTagLinks(
+        this.db,
+        'task_tags',
+        'task_id',
+        input.id,
+        taskWorkspace.workspace_id,
+        input.tagIds,
+      );
       this.db
         .prepare(
           `INSERT INTO task_history
@@ -615,13 +694,23 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           input.patch.blockedReason === undefined
             ? current.blocked_reason
             : input.patch.blockedReason,
+        tagIds:
+          input.patch.tagIds ??
+          tagIds(this.db, 'task_tags', 'task_id', input.taskId),
       };
+      const currentTagIds = tagIds(
+        this.db,
+        'task_tags',
+        'task_id',
+        input.taskId,
+      );
       const changed =
         next.title !== current.title ||
         next.body !== current.body_markdown ||
         next.priority !== current.priority ||
         next.dueDate !== current.due_date ||
-        next.blockedReason !== current.blocked_reason;
+        next.blockedReason !== current.blocked_reason ||
+        next.tagIds.join('\0') !== currentTagIds.join('\0');
       const revision = changed ? current.revision + 1 : current.revision;
       if (changed) {
         const update = this.db
@@ -641,6 +730,21 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           );
         if (update.changes !== 1)
           throw new ApplicationError('CONFLICT_REVISION');
+        const taskWorkspace = this.db
+          .prepare<
+            [string],
+            { workspace_id: string }
+          >('SELECT workspace_id FROM projects WHERE id=?')
+          .get(current.project_id);
+        if (!taskWorkspace) throw new ApplicationError('REFERENTIAL_INTEGRITY');
+        replaceTagLinks(
+          this.db,
+          'task_tags',
+          'task_id',
+          input.taskId,
+          taskWorkspace.workspace_id,
+          next.tagIds,
+        );
         if (next.priority !== current.priority) {
           this.insertTaskHistory(
             input.historyId,

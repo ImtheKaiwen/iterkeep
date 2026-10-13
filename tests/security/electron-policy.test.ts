@@ -17,7 +17,7 @@ describe('Electron baseline policy', () => {
     expect(main).toContain('setPermissionRequestHandler');
   });
 
-  it('exposes only named setup methods through the preload bridge', async () => {
+  it('exposes only named methods through the preload bridge', async () => {
     const preload = await fs.readFile(
       path.join(process.cwd(), 'apps/desktop/src/preload/preload.ts'),
       'utf8',
@@ -28,6 +28,8 @@ describe('Electron baseline policy', () => {
     expect(preload).not.toContain('channel: string');
     expect(preload).not.toContain('ipcRenderer.send');
     expect(preload).toContain('SETUP_ROUTES');
+    expect(preload).toContain('PROJECT_ROUTES');
+    expect(preload).toContain('TASK_ROUTES');
   });
 
   it('uses a restrictive renderer content security policy', async () => {

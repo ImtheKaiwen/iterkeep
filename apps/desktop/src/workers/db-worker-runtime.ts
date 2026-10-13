@@ -185,6 +185,9 @@ export class DatabaseWorkerRuntime {
                 ...(operation.input.patch.priority === undefined
                   ? {}
                   : { priority: operation.input.patch.priority }),
+                ...(operation.input.patch.tagIds === undefined
+                  ? {}
+                  : { tagIds: operation.input.patch.tagIds }),
               },
             });
           case 'changeProjectStatus':
@@ -212,6 +215,9 @@ export class DatabaseWorkerRuntime {
                 ...(operation.input.patch.blockedReason === undefined
                   ? {}
                   : { blockedReason: operation.input.patch.blockedReason }),
+                ...(operation.input.patch.tagIds === undefined
+                  ? {}
+                  : { tagIds: operation.input.patch.tagIds }),
               },
             });
           case 'changeTaskStatus':

@@ -27,6 +27,15 @@ interface DocumentRecord {
   deletedAt: string | null;
 }
 
+function equalStringLists(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length && left.every((value, i) => value === right[i])
+  );
+}
+
 export class InMemoryCoreRepository implements CoreRepositoryPort {
   readonly projects = new Map<string, ProjectSnapshot>();
   readonly decisions = new Map<string, DecisionSnapshot>();
@@ -47,6 +56,7 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       description: '',
       status: 'active',
       priority: 'none',
+      tagIds: [],
       revision: 1,
       deletedAt: null,
     });
@@ -94,6 +104,7 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
         description: input.description,
         status: 'active',
         priority: input.priority,
+        tagIds: input.tagIds,
         revision: 1,
         deletedAt: null,
       });
@@ -119,7 +130,8 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       const changed =
         next.name !== current.name ||
         next.description !== current.description ||
-        next.priority !== current.priority;
+        next.priority !== current.priority ||
+        !equalStringLists(next.tagIds, current.tagIds);
       const updated = {
         ...next,
         revision: changed ? current.revision + 1 : current.revision,
@@ -187,6 +199,7 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
         completedAt: null,
         sortOrder: 0,
         blockedReason: null,
+        tagIds: input.tagIds,
         revision: 1,
         deletedAt: null,
       });
@@ -205,11 +218,13 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       if (current.revision !== input.expectedRevision)
         throw new ApplicationError('CONFLICT_REVISION');
       const next = { ...current, ...input.patch };
-      const changed = Object.keys(input.patch).some(
-        (key) =>
-          next[key as keyof TaskSnapshot] !==
-          current[key as keyof TaskSnapshot],
-      );
+      const changed = Object.keys(input.patch).some((key) => {
+        if (key === 'tagIds')
+          return !equalStringLists(next.tagIds, current.tagIds);
+        return (
+          next[key as keyof TaskSnapshot] !== current[key as keyof TaskSnapshot]
+        );
+      });
       const updated = {
         ...next,
         revision: changed ? current.revision + 1 : current.revision,

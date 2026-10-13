@@ -507,6 +507,58 @@ for (const [name, createHarness] of [
       }
     });
 
+    it('persists project and task tag associations across updates', async () => {
+      const harness = await createHarness();
+      try {
+        const tag = await harness.core.createTag(
+          'Bağlam',
+          context('00000000-0000-4000-8000-000000000131'),
+        );
+        const project = await harness.core.createProject(
+          { name: 'Etiketli proje', tagIds: [tag.id] },
+          context('00000000-0000-4000-8000-000000000132'),
+        );
+        expect(await harness.core.getProject(project.id)).toMatchObject({
+          tagIds: [tag.id],
+        });
+
+        const task = await harness.core.createTask(
+          { projectId: project.id, title: 'Etiketli görev', tagIds: [tag.id] },
+          context('00000000-0000-4000-8000-000000000133'),
+        );
+        expect(await harness.core.getTask(task.id)).toMatchObject({
+          tagIds: [tag.id],
+        });
+
+        await harness.core.updateProject(
+          {
+            projectId: project.id,
+            expectedRevision: 1,
+            patch: { tagIds: [] },
+          },
+          context('00000000-0000-4000-8000-000000000134'),
+        );
+        await harness.core.updateTask(
+          {
+            taskId: task.id,
+            expectedRevision: 1,
+            patch: { tagIds: [] },
+          },
+          context('00000000-0000-4000-8000-000000000135'),
+        );
+        expect(await harness.core.getProject(project.id)).toMatchObject({
+          tagIds: [],
+          revision: 2,
+        });
+        expect(await harness.core.getTask(task.id)).toMatchObject({
+          tagIds: [],
+          revision: 2,
+        });
+      } finally {
+        await harness.close();
+      }
+    });
+
     it('rechecks archived parent policy inside repository mutations', async () => {
       const harness = await createHarness();
       try {
