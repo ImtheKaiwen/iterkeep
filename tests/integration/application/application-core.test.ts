@@ -559,6 +559,166 @@ for (const [name, createHarness] of [
       }
     });
 
+    it('paginates filtered summaries and composes a bounded resume snapshot', async () => {
+      const harness = await createHarness();
+      try {
+        const tag = await harness.core.createTag(
+          'Odak',
+          context('00000000-0000-4000-8000-000000000201'),
+        );
+        const alpha = await harness.core.createProject(
+          { name: 'Alpha', tagIds: [tag.id] },
+          context('00000000-0000-4000-8000-000000000202'),
+        );
+        const beta = await harness.core.createProject(
+          { name: 'Beta' },
+          context('00000000-0000-4000-8000-000000000203'),
+        );
+        const firstPage = await harness.core.listProjects({
+          limit: 2,
+          sortBy: 'name',
+          direction: 'asc',
+        });
+        expect(firstPage.items.map((project) => project.name)).toEqual([
+          'Alpha',
+          'Beta',
+        ]);
+        expect(firstPage.nextCursor).not.toBeNull();
+        const secondPage = await harness.core.listProjects({
+          cursor: firstPage.nextCursor ?? undefined,
+          limit: 2,
+          sortBy: 'name',
+          direction: 'asc',
+        });
+        expect(secondPage.items.map((project) => project.name)).toEqual([
+          'Inbox',
+        ]);
+        await expect(
+          harness.core.listProjects({
+            cursor: firstPage.nextCursor ?? undefined,
+            limit: 2,
+            search: 'different-query',
+            sortBy: 'name',
+            direction: 'asc',
+          }),
+        ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+
+        await harness.core.createTask(
+          {
+            projectId: alpha.id,
+            title: 'Geciken iş',
+            dueDate: '2026-10-09',
+            priority: 'urgent',
+            tagIds: [tag.id],
+          },
+          context('00000000-0000-4000-8000-000000000204'),
+        );
+        await harness.core.createTask(
+          { projectId: beta.id, title: 'Yarının işi', dueDate: '2026-10-11' },
+          context('00000000-0000-4000-8000-000000000205'),
+        );
+        const overdue = await harness.core.listTasks({
+          due: 'overdue',
+          tagIds: [tag.id],
+          sortBy: 'due_date',
+          direction: 'asc',
+          limit: 10,
+        });
+        expect(overdue.items.map((task) => task.title)).toEqual(['Geciken iş']);
+
+        await harness.core.appendActivity(
+          { projectId: alpha.id, textMarkdown: 'Son çalışma kaydı' },
+          context('00000000-0000-4000-8000-000000000206'),
+        );
+        await harness.core.createDecision(
+          { projectId: alpha.id, title: 'Mimari karar' },
+          context('00000000-0000-4000-8000-000000000207'),
+        );
+        const resume = await harness.core.getProjectResume(alpha.id);
+        expect(resume.project).toMatchObject({ id: alpha.id, name: 'Alpha' });
+        expect(resume.openTasks).toHaveLength(1);
+        expect(resume.latestLogs[0]).toMatchObject({
+          textMarkdown: 'Son çalışma kaydı',
+        });
+        expect(resume.recentDecisions[0]).toMatchObject({
+          title: 'Mimari karar',
+        });
+        expect(resume.computedAt).toBe(NOW);
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('reorders only a complete task lane with matching revisions', async () => {
+      const harness = await createHarness();
+      try {
+        const project = await harness.core.createProject(
+          { name: 'Kanban' },
+          context('00000000-0000-4000-8000-000000000211'),
+        );
+        const tasks = [];
+        for (let index = 0; index < 3; index += 1) {
+          tasks.push(
+            await harness.core.createTask(
+              { projectId: project.id, title: `Görev ${index + 1}` },
+              context(
+                `00000000-0000-4000-8000-${String(212 + index).padStart(12, '0')}`,
+              ),
+            ),
+          );
+        }
+        const orderedTaskIds = tasks.map((task) => task.id).reverse();
+        const expectedRevisions = Object.fromEntries(
+          tasks.map((task) => [task.id, 1]),
+        );
+        await expect(
+          harness.core.reorderTasks(
+            {
+              projectId: project.id,
+              status: 'todo',
+              orderedTaskIds: orderedTaskIds.slice(0, 2),
+              expectedRevisions: Object.fromEntries(
+                orderedTaskIds.slice(0, 2).map((id) => [id, 1]),
+              ),
+            },
+            context('00000000-0000-4000-8000-000000000215'),
+          ),
+        ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+
+        const receipt = await harness.core.reorderTasks(
+          {
+            projectId: project.id,
+            status: 'todo',
+            orderedTaskIds,
+            expectedRevisions,
+          },
+          context('00000000-0000-4000-8000-000000000216'),
+        );
+        expect(receipt.updatedIds.length).toBeGreaterThan(0);
+        const lane = await harness.core.listTasks({
+          projectId: project.id,
+          status: ['todo'],
+          sortBy: 'manual',
+          direction: 'asc',
+          limit: 10,
+        });
+        expect(lane.items.map((task) => task.id)).toEqual(orderedTaskIds);
+        await expect(
+          harness.core.reorderTasks(
+            {
+              projectId: project.id,
+              status: 'todo',
+              orderedTaskIds: [...orderedTaskIds].reverse(),
+              expectedRevisions,
+            },
+            context('00000000-0000-4000-8000-000000000217'),
+          ),
+        ).rejects.toMatchObject({ code: 'CONFLICT_REVISION' });
+      } finally {
+        await harness.close();
+      }
+    });
+
     it('rechecks archived parent policy inside repository mutations', async () => {
       const harness = await createHarness();
       try {

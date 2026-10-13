@@ -113,15 +113,58 @@ export const TaskSnapshotSchema = z.strictObject({
   revision: PositiveRevisionSchema,
   deletedAt: UtcMsSchema.nullable(),
 });
+export const TaskSummarySchema = TaskSnapshotSchema.pick({
+  id: true,
+  projectId: true,
+  title: true,
+  status: true,
+  priority: true,
+  dueDate: true,
+  sortOrder: true,
+  revision: true,
+});
+export const TaskPageSchema = z.strictObject({
+  items: z.array(TaskSummarySchema).max(100),
+  nextCursor: z.string().min(1).max(2048).nullable(),
+});
+export const TaskReorderRequest = MutationMetaSchema.extend({
+  payload: z
+    .strictObject({
+      projectId: ProjectIdSchema,
+      status: TaskStatusSchema,
+      orderedTaskIds: z.array(TaskIdSchema).max(250),
+      expectedRevisions: z.record(TaskIdSchema, PositiveRevisionSchema),
+    })
+    .refine(
+      (value) =>
+        new Set(value.orderedTaskIds).size === value.orderedTaskIds.length &&
+        Object.keys(value.expectedRevisions).length ===
+          value.orderedTaskIds.length &&
+        value.orderedTaskIds.every(
+          (id) => value.expectedRevisions[id] !== undefined,
+        ),
+    ),
+});
+export const TaskReorderReceiptSchema = z.strictObject({
+  updatedIds: z.array(TaskIdSchema).max(250),
+});
 
 const taskSnapshotResult = resultSchema(TaskSnapshotSchema);
+const taskPageResult = resultSchema(TaskPageSchema);
 const taskRevisionResult = resultSchema(TaskRevisionReceiptSchema);
+const taskReorderResult = resultSchema(TaskReorderReceiptSchema);
 const routeDefaults = {
   limitBytes: 2.25 * 1024 * 1024,
   rateLimit: 60,
 } as const;
 
 export const TASK_ROUTES = {
+  list: {
+    channel: 'iterkeep:v1:tasks.list',
+    request: TaskListRequest,
+    response: taskPageResult,
+    ...routeDefaults,
+  },
   get: {
     channel: 'iterkeep:v1:tasks.get',
     request: TaskGetRequest,
@@ -150,6 +193,12 @@ export const TASK_ROUTES = {
     channel: 'iterkeep:v1:tasks.move',
     request: TaskMoveRequest,
     response: taskRevisionResult,
+    ...routeDefaults,
+  },
+  reorder: {
+    channel: 'iterkeep:v1:tasks.reorder',
+    request: TaskReorderRequest,
+    response: taskReorderResult,
     ...routeDefaults,
   },
   trash: {

@@ -38,7 +38,10 @@ contextBridge.exposeInMainWorld('iterkeep', {
       invoke(SETUP_ROUTES.setupComplete, input, true),
   },
   projects: {
+    list: (input: unknown) => invoke(PROJECT_ROUTES.list, input),
     get: (projectId: string) => invoke(PROJECT_ROUTES.get, { projectId }),
+    getResume: (projectId: string) =>
+      invoke(PROJECT_ROUTES.getResume, { projectId }),
     create: (input: unknown) => invoke(PROJECT_ROUTES.create, input, true),
     update: (input: unknown) => invoke(PROJECT_ROUTES.update, input, true),
     changeStatus: (input: unknown) =>
@@ -47,12 +50,14 @@ contextBridge.exposeInMainWorld('iterkeep', {
     restore: (input: unknown) => invoke(PROJECT_ROUTES.restore, input, true),
   },
   tasks: {
+    list: (input: unknown) => invoke(TASK_ROUTES.list, input),
     get: (taskId: string) => invoke(TASK_ROUTES.get, { taskId }),
     create: (input: unknown) => invoke(TASK_ROUTES.create, input, true),
     update: (input: unknown) => invoke(TASK_ROUTES.update, input, true),
     changeStatus: (input: unknown) =>
       invoke(TASK_ROUTES.changeStatus, input, true),
     move: (input: unknown) => invoke(TASK_ROUTES.move, input, true),
+    reorder: (input: unknown) => invoke(TASK_ROUTES.reorder, input, true),
     trash: (input: unknown) => invoke(TASK_ROUTES.trash, input, true),
     restore: (input: unknown) => invoke(TASK_ROUTES.restore, input, true),
   },

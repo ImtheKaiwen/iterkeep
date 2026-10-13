@@ -1,9 +1,13 @@
 import type {
   CoreRepositoryPort,
   DecisionSnapshot,
+  Page,
   PersistenceContext,
+  ProjectResumeSnapshot,
   ProjectSnapshot,
+  ProjectSummary,
   RevisionReceipt,
+  TaskSummary,
   WorkspaceSnapshot,
 } from '@iterkeep/application';
 import type Database from 'better-sqlite3';
@@ -117,6 +121,81 @@ function replaceTagLinks(
   for (const tagId of nextTagIds) insert.run(ownerId, tagId);
 }
 
+function listCursorOffset(
+  cursor: string | undefined,
+  fingerprint: string,
+): number {
+  if (!cursor) return 0;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(cursor)) as {
+      v?: unknown;
+      fingerprint?: unknown;
+      offset?: unknown;
+    };
+    if (
+      parsed.v !== 1 ||
+      parsed.fingerprint !== fingerprint ||
+      !Number.isSafeInteger(parsed.offset) ||
+      (parsed.offset as number) < 0
+    ) {
+      throw new Error('invalid');
+    }
+    return parsed.offset as number;
+  } catch {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+}
+
+function nextListCursor(
+  fingerprint: string,
+  offset: number,
+  returned: number,
+  hasMore: boolean,
+): string | null {
+  return hasMore
+    ? encodeURIComponent(
+        JSON.stringify({ v: 1, fingerprint, offset: offset + returned }),
+      )
+    : null;
+}
+
+function localDateAt(instant: string, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(instant));
+    const value = Object.fromEntries(
+      parts.map((part) => [part.type, part.value]),
+    );
+    return `${value.year}-${value.month}-${value.day}`;
+  } catch {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+}
+
+function assertFilterTags(
+  db: Database.Database,
+  tagIdsToCheck: readonly string[] | undefined,
+): void {
+  if (!tagIdsToCheck || tagIdsToCheck.length === 0) return;
+  const workspace = db
+    .prepare<[], { id: string }>('SELECT id FROM workspaces')
+    .get();
+  if (!workspace) throw new ApplicationError('NOT_FOUND');
+  const placeholders = tagIdsToCheck.map(() => '?').join(',');
+  const count = db
+    .prepare<
+      unknown[],
+      { count: number }
+    >(`SELECT count(*) AS count FROM tags WHERE workspace_id=? AND id IN (${placeholders})`)
+    .get(workspace.id, ...tagIdsToCheck)?.count;
+  if (count !== tagIdsToCheck.length)
+    throw new ApplicationError('VALIDATION_FAILED');
+}
+
 interface DocumentRow {
   readonly id: string;
   readonly project_id: string;
@@ -211,6 +290,274 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
       .get();
     if (!row) throw new ApplicationError('NOT_FOUND');
     return { id: row.id, inboxProjectId: row.inbox_project_id };
+  }
+
+  async listProjects(
+    input: Parameters<CoreRepositoryPort['listProjects']>[0],
+  ): Promise<Page<ProjectSummary>> {
+    assertFilterTags(this.db, input.tagIds);
+    const fingerprint = JSON.stringify({ ...input, cursor: undefined });
+    const offset = listCursorOffset(input.cursor, fingerprint);
+    const conditions = ['p.deleted_at IS NULL'];
+    const parameters: unknown[] = [];
+    if (input.status?.length) {
+      conditions.push(`p.status IN (${input.status.map(() => '?').join(',')})`);
+      parameters.push(...input.status);
+    }
+    if (input.search) {
+      conditions.push('instr(lower(p.name),lower(?)) > 0');
+      parameters.push(input.search);
+    }
+    if (input.tagIds?.length) {
+      conditions.push(
+        `(SELECT count(*) FROM project_tags pf WHERE pf.project_id=p.id AND pf.tag_id IN (${input.tagIds.map(() => '?').join(',')}))=?`,
+      );
+      parameters.push(...input.tagIds, input.tagIds.length);
+    }
+    const sortExpression =
+      input.sortBy === 'name'
+        ? 'p.name COLLATE NOCASE'
+        : input.sortBy === 'status'
+          ? 'p.status'
+          : "COALESCE(p.last_activity_at,'')";
+    const direction = input.direction === 'asc' ? 'ASC' : 'DESC';
+    interface Row {
+      id: string;
+      kind: 'user' | 'inbox';
+      name: string;
+      status: ProjectSummary['status'];
+      priority: ProjectSummary['priority'];
+      last_activity_at: string | null;
+      open_task_count: number;
+      revision: number;
+    }
+    const rows = this.db
+      .prepare<unknown[], Row>(
+        `SELECT p.id,p.kind,p.name,p.status,p.priority,p.last_activity_at,p.revision,
+          (SELECT count(*) FROM tasks t WHERE t.project_id=p.id
+           AND t.deleted_at IS NULL AND t.status IN ('todo','in_progress','blocked')) AS open_task_count
+         FROM projects p
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY ${sortExpression} ${direction},p.id ${direction}
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...parameters, input.limit + 1, offset);
+    const hasMore = rows.length > input.limit;
+    const items = rows.slice(0, input.limit).map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      name: row.name,
+      status: row.status,
+      priority: row.priority,
+      lastActivityAt: row.last_activity_at,
+      openTaskCount: row.open_task_count,
+      revision: row.revision,
+    }));
+    return {
+      items,
+      nextCursor: nextListCursor(fingerprint, offset, items.length, hasMore),
+    };
+  }
+
+  async getProjectResume(
+    projectId: string,
+    computedAt: string,
+  ): Promise<ProjectResumeSnapshot | null> {
+    return this.db.transaction(() => {
+      const project = this.db
+        .prepare<
+          [string],
+          {
+            id: string;
+            name: string;
+            status: ProjectSnapshot['status'];
+            revision: number;
+          }
+        >(
+          'SELECT id,name,status,revision FROM projects WHERE id=? AND deleted_at IS NULL',
+        )
+        .get(projectId);
+      if (!project) return null;
+      const openTasks = this.db
+        .prepare<
+          [string],
+          {
+            id: string;
+            project_id: string;
+            title: string;
+            status: TaskSummary['status'];
+            priority: TaskSummary['priority'];
+            due_date: string | null;
+            sort_order: number;
+            revision: number;
+          }
+        >(
+          `SELECT id,project_id,title,status,priority,due_date,sort_order,revision
+           FROM tasks WHERE project_id=? AND deleted_at IS NULL
+             AND status IN ('todo','in_progress','blocked')
+           ORDER BY (status='in_progress') DESC,
+             CASE priority WHEN 'urgent' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+             due_date IS NULL,due_date ASC,sort_order ASC,id ASC LIMIT 20`,
+        )
+        .all(projectId)
+        .map((row) => ({
+          id: row.id,
+          projectId: row.project_id,
+          title: row.title,
+          status: row.status,
+          priority: row.priority,
+          dueDate: row.due_date,
+          sortOrder: row.sort_order,
+          revision: row.revision,
+        }));
+      const latestLogs = this.db
+        .prepare<
+          [string],
+          { id: string; text_markdown: string; occurred_at: string }
+        >(
+          `SELECT id,substr(text_markdown,1,2000) AS text_markdown,occurred_at
+           FROM activity_logs WHERE project_id=?
+           ORDER BY occurred_at DESC,recorded_at DESC,id DESC LIMIT 20`,
+        )
+        .all(projectId)
+        .map((row) => ({
+          id: row.id,
+          textMarkdown: row.text_markdown,
+          occurredAt: row.occurred_at,
+        }));
+      const recentDecisions = this.db
+        .prepare<
+          [string],
+          {
+            id: string;
+            display_code: string;
+            title: string;
+            status: DecisionSnapshot['status'];
+            updated_at: string;
+          }
+        >(
+          `SELECT id,display_code,title,status,updated_at FROM decisions
+           WHERE project_id=? AND deleted_at IS NULL
+           ORDER BY updated_at DESC,id DESC LIMIT 10`,
+        )
+        .all(projectId)
+        .map((row) => ({
+          id: row.id,
+          displayCode: row.display_code,
+          title: row.title,
+          status: row.status,
+          updatedAt: row.updated_at,
+        }));
+      return {
+        project,
+        openTasks,
+        latestLogs,
+        recentDecisions,
+        computedAt,
+      };
+    })();
+  }
+
+  async listTasks(
+    input: Parameters<CoreRepositoryPort['listTasks']>[0],
+  ): Promise<Page<TaskSummary>> {
+    assertFilterTags(this.db, input.tagIds);
+    const fingerprint = JSON.stringify({
+      ...input,
+      cursor: undefined,
+      now: undefined,
+    });
+    const offset = listCursorOffset(input.cursor, fingerprint);
+    const conditions = ['t.deleted_at IS NULL', 'p.deleted_at IS NULL'];
+    const parameters: unknown[] = [];
+    if (input.projectId) {
+      conditions.push('t.project_id=?');
+      parameters.push(input.projectId);
+    } else {
+      conditions.push("p.status<>'archived'");
+    }
+    if (input.status?.length) {
+      conditions.push(`t.status IN (${input.status.map(() => '?').join(',')})`);
+      parameters.push(...input.status);
+    }
+    if (input.priority?.length) {
+      conditions.push(
+        `t.priority IN (${input.priority.map(() => '?').join(',')})`,
+      );
+      parameters.push(...input.priority);
+    }
+    if (input.tagIds?.length) {
+      conditions.push(
+        `(SELECT count(*) FROM task_tags tf WHERE tf.task_id=t.id AND tf.tag_id IN (${input.tagIds.map(() => '?').join(',')}))=?`,
+      );
+      parameters.push(...input.tagIds, input.tagIds.length);
+    }
+    if (input.due) {
+      if (input.due === 'no_date') conditions.push('t.due_date IS NULL');
+      else {
+        const timezone = this.db
+          .prepare<
+            [],
+            { timezone: string }
+          >('SELECT timezone FROM workspace_preferences')
+          .get()?.timezone;
+        if (!timezone) throw new ApplicationError('NOT_FOUND');
+        const today = localDateAt(input.now, timezone);
+        const operator =
+          input.due === 'today' ? '=' : input.due === 'upcoming' ? '>' : '<';
+        conditions.push(`t.due_date ${operator} ?`);
+        parameters.push(today);
+        if (input.due === 'overdue')
+          conditions.push("t.status IN ('todo','in_progress','blocked')");
+      }
+    }
+    const sortExpression =
+      input.sortBy === 'manual'
+        ? 't.sort_order'
+        : input.sortBy === 'due_date'
+          ? "COALESCE(t.due_date,'9999-12-31')"
+          : input.sortBy === 'priority'
+            ? "CASE t.priority WHEN 'urgent' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END"
+            : 't.updated_at';
+    const direction = input.direction === 'asc' ? 'ASC' : 'DESC';
+    const orderBy =
+      input.sortBy === 'manual'
+        ? 't.sort_order ASC,t.created_at ASC,t.id ASC'
+        : `${sortExpression} ${direction},t.id ${direction}`;
+    interface Row {
+      id: string;
+      project_id: string;
+      title: string;
+      status: TaskSummary['status'];
+      priority: TaskSummary['priority'];
+      due_date: string | null;
+      sort_order: number;
+      revision: number;
+    }
+    const rows = this.db
+      .prepare<unknown[], Row>(
+        `SELECT t.id,t.project_id,t.title,t.status,t.priority,t.due_date,t.sort_order,t.revision
+         FROM tasks t JOIN projects p ON p.id=t.project_id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY ${orderBy}
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...parameters, input.limit + 1, offset);
+    const hasMore = rows.length > input.limit;
+    const items = rows.slice(0, input.limit).map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      status: row.status,
+      priority: row.priority,
+      dueDate: row.due_date,
+      sortOrder: row.sort_order,
+      revision: row.revision,
+    }));
+    return {
+      items,
+      nextCursor: nextListCursor(fingerprint, offset, items.length, hasMore),
+    };
   }
 
   async getProject(projectId: string): Promise<ProjectSnapshot | null> {
@@ -928,6 +1275,91 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
         });
       }
       const result = { id: input.taskId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async reorderTasks(
+    input: Parameters<CoreRepositoryPort['reorderTasks']>[0],
+  ): Promise<{ readonly updatedIds: readonly string[] }> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'tasks.reorder';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<{ readonly updatedIds: readonly string[] }>,
+      );
+      if (prior) return prior;
+      assertProjectWritable(this.db, input.projectId);
+      const lane = this.db
+        .prepare<
+          [string, string],
+          { id: string; revision: number; sort_order: number }
+        >(
+          `SELECT id,revision,sort_order FROM tasks
+           WHERE project_id=? AND status=? AND deleted_at IS NULL
+           ORDER BY sort_order ASC,created_at ASC,id ASC`,
+        )
+        .all(input.projectId, input.status);
+      if (
+        lane.length > 250 ||
+        lane.length !== input.orderedTaskIds.length ||
+        lane.some((task) => !input.orderedTaskIds.includes(task.id)) ||
+        Object.keys(input.expectedRevisions).length !== lane.length
+      ) {
+        throw new ApplicationError('VALIDATION_FAILED');
+      }
+      for (const task of lane) {
+        if (input.expectedRevisions[task.id] !== task.revision) {
+          throw new ApplicationError('CONFLICT_REVISION');
+        }
+      }
+      const sameOrder = lane.every(
+        (task, index) => task.id === input.orderedTaskIds[index],
+      );
+      const updatedIds: string[] = [];
+      let aggregateRevision = 1;
+      if (!sameOrder) {
+        const rows = new Map(lane.map((task) => [task.id, task]));
+        const update = this.db.prepare(
+          `UPDATE tasks SET sort_order=?,updated_at=?,revision=revision+1
+           WHERE id=? AND project_id=? AND status=? AND deleted_at IS NULL AND revision=?`,
+        );
+        input.orderedTaskIds.forEach((id, index) => {
+          const current = rows.get(id);
+          if (!current) throw new ApplicationError('VALIDATION_FAILED');
+          const sortOrder = index * 1024;
+          if (current.sort_order === sortOrder) return;
+          const result = update.run(
+            sortOrder,
+            input.context.now,
+            id,
+            input.projectId,
+            input.status,
+            current.revision,
+          );
+          if (result.changes !== 1)
+            throw new ApplicationError('CONFLICT_REVISION');
+          aggregateRevision = Math.max(aggregateRevision, current.revision + 1);
+          updatedIds.push(id);
+        });
+        if (updatedIds.length > 0) {
+          appendEvent(this.db, {
+            id: input.eventId,
+            type: 'task.updated',
+            aggregateId: input.projectId,
+            aggregateRevision,
+            ...actorEvent(input.context),
+            payload: {
+              projectId: input.projectId,
+              status: input.status,
+              updatedIds,
+            },
+          });
+        }
+      }
+      const result = { updatedIds };
       saveReceipt(this.db, command, input.receiptId, input.context, result);
       return result;
     });

@@ -95,6 +95,23 @@ describe('IP-03 trust-boundary schemas', () => {
         },
       }).success,
     ).toBe(false);
+
+    const taskIds = Array.from(
+      { length: 251 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    );
+    expect(
+      TASK_ROUTES.reorder.request.safeParse({
+        ...requestMeta,
+        payload: {
+          projectId,
+          status: 'todo',
+          orderedTaskIds: taskIds,
+          expectedRevisions: Object.fromEntries(taskIds.map((id) => [id, 1])),
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('denies sensitive error details and arbitrary failure codes', () => {

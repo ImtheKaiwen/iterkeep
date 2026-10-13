@@ -40,6 +40,52 @@ interface TaskState {
   readonly deletedAt: string | null;
 }
 
+interface Page<T> {
+  readonly items: readonly T[];
+  readonly nextCursor: string | null;
+}
+
+interface ProjectSummary {
+  readonly id: string;
+  readonly kind: 'user' | 'inbox';
+  readonly name: string;
+  readonly status: ProjectStatus;
+  readonly priority: Priority;
+  readonly lastActivityAt: string | null;
+  readonly openTaskCount: number;
+  readonly revision: number;
+}
+
+type TaskSummary = Pick<
+  TaskState,
+  | 'id'
+  | 'projectId'
+  | 'title'
+  | 'status'
+  | 'priority'
+  | 'dueDate'
+  | 'sortOrder'
+  | 'revision'
+>;
+
+interface ProjectResumeState {
+  readonly project: Pick<ProjectState, 'id' | 'name' | 'status' | 'revision'>;
+  readonly openTasks: readonly TaskSummary[];
+  readonly latestLogs: readonly {
+    id: string;
+    textMarkdown: string;
+    occurredAt: string;
+  }[];
+  readonly recentDecisions: readonly {
+    id: string;
+    displayCode: string;
+    title: string;
+    status: 'proposed' | 'accepted' | 'rejected' | 'superseded';
+    updatedAt: string;
+  }[];
+  readonly computedAt: string;
+}
+
 interface WorkspaceState {
   readonly id: string;
   readonly displayName: string;
@@ -84,7 +130,17 @@ interface Window {
       complete(input: { expectedRevision: number }): Promise<SetupState>;
     };
     readonly projects: {
+      list(input: {
+        cursor?: string;
+        limit?: number;
+        status?: readonly ProjectStatus[];
+        search?: string;
+        tagIds?: readonly string[];
+        sortBy?: 'recent' | 'name' | 'status';
+        direction?: 'asc' | 'desc';
+      }): Promise<Page<ProjectSummary>>;
       get(projectId: string): Promise<ProjectState>;
+      getResume(projectId: string): Promise<ProjectResumeState>;
       create(input: {
         name: string;
         description?: string;
@@ -116,6 +172,17 @@ interface Window {
       }): Promise<RevisionReceipt>;
     };
     readonly tasks: {
+      list(input: {
+        projectId?: string;
+        status?: readonly TaskStatus[];
+        priority?: readonly Priority[];
+        tagIds?: readonly string[];
+        due?: 'overdue' | 'today' | 'upcoming' | 'no_date';
+        sortBy?: 'manual' | 'due_date' | 'priority' | 'updated_at';
+        direction?: 'asc' | 'desc';
+        cursor?: string;
+        limit?: number;
+      }): Promise<Page<TaskSummary>>;
       get(taskId: string): Promise<TaskState>;
       create(input: {
         projectId?: string;
@@ -149,6 +216,12 @@ interface Window {
         sortOrder?: number;
         expectedRevision: number;
       }): Promise<RevisionReceipt>;
+      reorder(input: {
+        projectId: string;
+        status: TaskStatus;
+        orderedTaskIds: readonly string[];
+        expectedRevisions: Readonly<Record<string, number>>;
+      }): Promise<{ updatedIds: readonly string[] }>;
       trash(input: {
         taskId: string;
         expectedRevision: number;

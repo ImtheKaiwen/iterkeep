@@ -36,6 +36,58 @@ function equalStringLists(
   );
 }
 
+function cursorOffset(cursor: string | undefined, fingerprint: string): number {
+  if (!cursor) return 0;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(cursor)) as {
+      v?: unknown;
+      fingerprint?: unknown;
+      offset?: unknown;
+    };
+    if (
+      parsed.v !== 1 ||
+      parsed.fingerprint !== fingerprint ||
+      !Number.isSafeInteger(parsed.offset) ||
+      (parsed.offset as number) < 0
+    ) {
+      throw new Error('invalid');
+    }
+    return parsed.offset as number;
+  } catch {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+}
+
+function page<T>(
+  values: readonly T[],
+  limit: number,
+  cursor: string | undefined,
+  fingerprint: string,
+): { readonly items: readonly T[]; readonly nextCursor: string | null } {
+  const offset = cursorOffset(cursor, fingerprint);
+  const items = values.slice(offset, offset + limit);
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    nextCursor:
+      nextOffset < values.length
+        ? encodeURIComponent(
+            JSON.stringify({ v: 1, fingerprint, offset: nextOffset }),
+          )
+        : null,
+  };
+}
+
+function compareValues(
+  left: string | number | null,
+  right: string | number | null,
+) {
+  if (left === right) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  return left < right ? -1 : 1;
+}
+
 export class InMemoryCoreRepository implements CoreRepositoryPort {
   readonly projects = new Map<string, ProjectSnapshot>();
   readonly decisions = new Map<string, DecisionSnapshot>();
@@ -64,6 +116,218 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
 
   async getWorkspace(): Promise<WorkspaceSnapshot> {
     return this.workspace;
+  }
+
+  async listProjects(
+    input: Parameters<CoreRepositoryPort['listProjects']>[0],
+  ): ReturnType<CoreRepositoryPort['listProjects']> {
+    const fingerprint = JSON.stringify({ ...input, cursor: undefined });
+    const direction = input.direction === 'asc' ? 1 : -1;
+    const values = [...this.projects.values()]
+      .filter(
+        (project) =>
+          project.deletedAt === null &&
+          (!input.status || input.status.includes(project.status)) &&
+          (!input.search ||
+            project.name
+              .toLocaleLowerCase()
+              .includes(input.search.toLocaleLowerCase())) &&
+          (!input.tagIds ||
+            input.tagIds.every((tagId) => project.tagIds.includes(tagId))),
+      )
+      .map((project) => ({
+        id: project.id,
+        kind: project.kind,
+        name: project.name,
+        status: project.status,
+        priority: project.priority,
+        lastActivityAt: null,
+        openTaskCount: [...this.tasks.values()].filter(
+          (task) =>
+            task.projectId === project.id &&
+            task.deletedAt === null &&
+            ['todo', 'in_progress', 'blocked'].includes(task.status),
+        ).length,
+        revision: project.revision,
+      }))
+      .sort((left, right) => {
+        const key =
+          input.sortBy === 'name'
+            ? compareValues(left.name, right.name)
+            : input.sortBy === 'status'
+              ? compareValues(left.status, right.status)
+              : compareValues(left.lastActivityAt, right.lastActivityAt);
+        return key === 0
+          ? left.id.localeCompare(right.id) * direction
+          : key * direction;
+      });
+    return Promise.resolve(
+      page(values, input.limit, input.cursor, fingerprint),
+    );
+  }
+
+  async getProjectResume(
+    projectId: string,
+    computedAt: string,
+  ): ReturnType<CoreRepositoryPort['getProjectResume']> {
+    const project = this.projects.get(projectId);
+    if (!project || project.deletedAt !== null) return Promise.resolve(null);
+    const openTasks = [...this.tasks.values()]
+      .filter(
+        (task) =>
+          task.projectId === projectId &&
+          task.deletedAt === null &&
+          ['todo', 'in_progress', 'blocked'].includes(task.status),
+      )
+      .sort(
+        (left, right) =>
+          left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
+      )
+      .slice(0, 20)
+      .map(
+        ({
+          id,
+          projectId: ownerId,
+          title,
+          status,
+          priority,
+          dueDate,
+          sortOrder,
+          revision,
+        }) => ({
+          id,
+          projectId: ownerId,
+          title,
+          status,
+          priority,
+          dueDate,
+          sortOrder,
+          revision,
+        }),
+      );
+    const latestLogs = [...this.activities.values()]
+      .filter((activity) => activity.projectId === projectId)
+      .sort(
+        (left, right) =>
+          right.occurredAt.localeCompare(left.occurredAt) ||
+          right.id.localeCompare(left.id),
+      )
+      .slice(0, 20)
+      .map(({ id, textMarkdown, occurredAt }) => ({
+        id,
+        textMarkdown: textMarkdown.slice(0, 2_000),
+        occurredAt,
+      }));
+    const recentDecisions = [...this.decisions.values()]
+      .filter((decision) => decision.projectId === projectId)
+      .slice(-10)
+      .reverse()
+      .map((decision, index) => ({
+        id: decision.id,
+        displayCode: `DEC-${String(index + 1).padStart(4, '0')}`,
+        title: decision.title,
+        status: decision.status,
+        updatedAt: computedAt,
+      }));
+    return Promise.resolve({
+      project: {
+        id: project.id,
+        name: project.name,
+        status: project.status,
+        revision: project.revision,
+      },
+      openTasks,
+      latestLogs,
+      recentDecisions,
+      computedAt,
+    });
+  }
+
+  async listTasks(
+    input: Parameters<CoreRepositoryPort['listTasks']>[0],
+  ): ReturnType<CoreRepositoryPort['listTasks']> {
+    const fingerprint = JSON.stringify({
+      ...input,
+      cursor: undefined,
+      now: undefined,
+    });
+    const today = input.now.slice(0, 10);
+    const direction = input.direction === 'asc' ? 1 : -1;
+    const priorityRank = {
+      none: 0,
+      low: 1,
+      medium: 2,
+      high: 3,
+      urgent: 4,
+    } as const;
+    const values = [...this.tasks.values()]
+      .filter((task) => {
+        const parent = this.projects.get(task.projectId);
+        const projectVisible =
+          parent &&
+          parent.deletedAt === null &&
+          (input.projectId !== undefined || parent.status !== 'archived');
+        const dueMatches =
+          !input.due ||
+          (input.due === 'no_date'
+            ? task.dueDate === null
+            : task.dueDate !== null &&
+              (input.due === 'today'
+                ? task.dueDate === today
+                : input.due === 'upcoming'
+                  ? task.dueDate > today
+                  : task.dueDate < today &&
+                    ['todo', 'in_progress', 'blocked'].includes(task.status)));
+        return Boolean(
+          task.deletedAt === null &&
+          projectVisible &&
+          (!input.projectId || task.projectId === input.projectId) &&
+          (!input.status || input.status.includes(task.status)) &&
+          (!input.priority || input.priority.includes(task.priority)) &&
+          (!input.tagIds ||
+            input.tagIds.every((tagId) => task.tagIds.includes(tagId))) &&
+          dueMatches,
+        );
+      })
+      .map(
+        ({
+          id,
+          projectId,
+          title,
+          status,
+          priority,
+          dueDate,
+          sortOrder,
+          revision,
+        }) => ({
+          id,
+          projectId,
+          title,
+          status,
+          priority,
+          dueDate,
+          sortOrder,
+          revision,
+        }),
+      )
+      .sort((left, right) => {
+        let key = 0;
+        if (input.sortBy === 'manual')
+          key = compareValues(left.sortOrder, right.sortOrder);
+        if (input.sortBy === 'due_date')
+          key = compareValues(left.dueDate, right.dueDate);
+        if (input.sortBy === 'priority')
+          key = compareValues(
+            priorityRank[left.priority],
+            priorityRank[right.priority],
+          );
+        return key === 0
+          ? left.id.localeCompare(right.id) * direction
+          : key * direction;
+      });
+    return Promise.resolve(
+      page(values, input.limit, input.cursor, fingerprint),
+    );
   }
 
   async getProject(projectId: string): Promise<ProjectSnapshot | null> {
@@ -296,6 +560,56 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       this.tasks.set(current.id, updated);
       if (changed) this.events.push(input.eventId);
       return { id: current.id, revision: updated.revision, changed };
+    });
+  }
+
+  async reorderTasks(
+    input: Parameters<CoreRepositoryPort['reorderTasks']>[0],
+  ): ReturnType<CoreRepositoryPort['reorderTasks']> {
+    return this.once('tasks.reorder', input.context, () => {
+      this.assertWritable(input.projectId);
+      const lane = [...this.tasks.values()]
+        .filter(
+          (task) =>
+            task.projectId === input.projectId &&
+            task.status === input.status &&
+            task.deletedAt === null,
+        )
+        .sort(
+          (left, right) =>
+            left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
+        );
+      if (
+        lane.length > 250 ||
+        lane.length !== input.orderedTaskIds.length ||
+        lane.some((task) => !input.orderedTaskIds.includes(task.id))
+      ) {
+        throw new ApplicationError('VALIDATION_FAILED');
+      }
+      for (const task of lane) {
+        if (input.expectedRevisions[task.id] !== task.revision)
+          throw new ApplicationError('CONFLICT_REVISION');
+      }
+      if (
+        lane.every((task, index) => task.id === input.orderedTaskIds[index])
+      ) {
+        return { updatedIds: [] };
+      }
+      const updatedIds: string[] = [];
+      input.orderedTaskIds.forEach((id, index) => {
+        const task = this.requireTask(id);
+        const sortOrder = index * 1024;
+        if (task.sortOrder !== sortOrder) {
+          this.tasks.set(id, {
+            ...task,
+            sortOrder,
+            revision: task.revision + 1,
+          });
+          updatedIds.push(id);
+        }
+      });
+      if (updatedIds.length > 0) this.events.push(input.eventId);
+      return { updatedIds };
     });
   }
 

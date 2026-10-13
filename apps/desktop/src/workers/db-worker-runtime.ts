@@ -166,8 +166,56 @@ export class DatabaseWorkerRuntime {
         switch (operation.method) {
           case 'getWorkspace':
             return this.#coreRepository.getWorkspace();
+          case 'listProjects':
+            return this.#coreRepository.listProjects({
+              limit: operation.input.limit,
+              sortBy: operation.input.sortBy,
+              direction: operation.input.direction,
+              ...(operation.input.cursor === undefined
+                ? {}
+                : { cursor: operation.input.cursor }),
+              ...(operation.input.status === undefined
+                ? {}
+                : { status: operation.input.status }),
+              ...(operation.input.search === undefined
+                ? {}
+                : { search: operation.input.search }),
+              ...(operation.input.tagIds === undefined
+                ? {}
+                : { tagIds: operation.input.tagIds }),
+            });
           case 'getProject':
             return this.#coreRepository.getProject(operation.input.projectId);
+          case 'getProjectResume':
+            return this.#coreRepository.getProjectResume(
+              operation.input.projectId,
+              operation.input.computedAt,
+            );
+          case 'listTasks':
+            return this.#coreRepository.listTasks({
+              limit: operation.input.limit,
+              sortBy: operation.input.sortBy,
+              direction: operation.input.direction,
+              now: operation.input.now,
+              ...(operation.input.projectId === undefined
+                ? {}
+                : { projectId: operation.input.projectId }),
+              ...(operation.input.status === undefined
+                ? {}
+                : { status: operation.input.status }),
+              ...(operation.input.priority === undefined
+                ? {}
+                : { priority: operation.input.priority }),
+              ...(operation.input.tagIds === undefined
+                ? {}
+                : { tagIds: operation.input.tagIds }),
+              ...(operation.input.due === undefined
+                ? {}
+                : { due: operation.input.due }),
+              ...(operation.input.cursor === undefined
+                ? {}
+                : { cursor: operation.input.cursor }),
+            });
           case 'getTask':
             return this.#coreRepository.getTask(operation.input.taskId);
           case 'createProject':
@@ -239,6 +287,8 @@ export class DatabaseWorkerRuntime {
                 : { sortOrder: operation.input.sortOrder }),
               context: operation.input.context,
             });
+          case 'reorderTasks':
+            return this.#coreRepository.reorderTasks(operation.input);
           case 'setTaskDeleted':
             return this.#coreRepository.setTaskDeleted(operation.input);
         }

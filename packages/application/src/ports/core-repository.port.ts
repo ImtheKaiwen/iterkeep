@@ -47,6 +47,56 @@ export interface ProjectSnapshot {
   readonly deletedAt: string | null;
 }
 
+export interface ProjectSummary {
+  readonly id: string;
+  readonly kind: 'user' | 'inbox';
+  readonly name: string;
+  readonly status: ProjectStatus;
+  readonly priority: Priority;
+  readonly lastActivityAt: string | null;
+  readonly openTaskCount: number;
+  readonly revision: number;
+}
+
+export interface TaskSummary {
+  readonly id: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly status: TaskStatus;
+  readonly priority: Priority;
+  readonly dueDate: string | null;
+  readonly sortOrder: number;
+  readonly revision: number;
+}
+
+export interface Page<T> {
+  readonly items: readonly T[];
+  readonly nextCursor: string | null;
+}
+
+export interface ProjectResumeSnapshot {
+  readonly project: {
+    readonly id: string;
+    readonly name: string;
+    readonly status: ProjectStatus;
+    readonly revision: number;
+  };
+  readonly openTasks: readonly TaskSummary[];
+  readonly latestLogs: readonly {
+    readonly id: string;
+    readonly textMarkdown: string;
+    readonly occurredAt: string;
+  }[];
+  readonly recentDecisions: readonly {
+    readonly id: string;
+    readonly displayCode: string;
+    readonly title: string;
+    readonly status: DecisionStatus;
+    readonly updatedAt: string;
+  }[];
+  readonly computedAt: string;
+}
+
 export interface DecisionSnapshot {
   readonly id: string;
   readonly projectId: string;
@@ -105,7 +155,32 @@ export interface TagSnapshot {
 
 export interface CoreRepositoryPort {
   getWorkspace(): Promise<WorkspaceSnapshot>;
+  listProjects(input: {
+    cursor?: string;
+    limit: number;
+    status?: readonly ProjectStatus[];
+    search?: string;
+    tagIds?: readonly string[];
+    sortBy: 'recent' | 'name' | 'status';
+    direction: 'asc' | 'desc';
+  }): Promise<Page<ProjectSummary>>;
   getProject(projectId: string): Promise<ProjectSnapshot | null>;
+  getProjectResume(
+    projectId: string,
+    computedAt: string,
+  ): Promise<ProjectResumeSnapshot | null>;
+  listTasks(input: {
+    projectId?: string;
+    status?: readonly TaskStatus[];
+    priority?: readonly Priority[];
+    tagIds?: readonly string[];
+    due?: 'overdue' | 'today' | 'upcoming' | 'no_date';
+    sortBy: 'manual' | 'due_date' | 'priority' | 'updated_at';
+    direction: 'asc' | 'desc';
+    cursor?: string;
+    limit: number;
+    now: string;
+  }): Promise<Page<TaskSummary>>;
   getTask(taskId: string): Promise<TaskSnapshot | null>;
   getDocument(documentId: string): Promise<DocumentSnapshot | null>;
   getDecision(decisionId: string): Promise<DecisionSnapshot | null>;
@@ -201,6 +276,16 @@ export interface CoreRepositoryPort {
     sortOrder?: number;
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
+
+  reorderTasks(input: {
+    projectId: string;
+    status: TaskStatus;
+    orderedTaskIds: readonly string[];
+    expectedRevisions: Readonly<Record<string, number>>;
+    eventId: string;
+    receiptId: string;
+    context: PersistenceContext;
+  }): Promise<{ readonly updatedIds: readonly string[] }>;
 
   setTaskDeleted(input: {
     taskId: string;

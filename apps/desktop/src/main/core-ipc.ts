@@ -50,11 +50,17 @@ export function registerCoreIpc(
       listener(value as Input, meta),
     );
 
+  handle(PROJECT_ROUTES.list, (value) =>
+    core.listProjects(value as Parameters<ApplicationCore['listProjects']>[0]),
+  );
   handle(PROJECT_ROUTES.get, async (value) => {
     const project = await core.getProject(required<string>(value.projectId));
     if (!project) throw new ApplicationError('NOT_FOUND');
     return project;
   });
+  handle(PROJECT_ROUTES.getResume, (value) =>
+    core.getProjectResume(required<string>(value.projectId)),
+  );
   handle(PROJECT_ROUTES.create, (value, meta) =>
     core.createProject(
       value as {
@@ -103,6 +109,9 @@ export function registerCoreIpc(
     ),
   );
 
+  handle(TASK_ROUTES.list, (value) =>
+    core.listTasks(value as Parameters<ApplicationCore['listTasks']>[0]),
+  );
   handle(TASK_ROUTES.get, async (value) => {
     const task = await core.getTask(required<string>(value.taskId));
     if (!task) throw new ApplicationError('NOT_FOUND');
@@ -140,6 +149,12 @@ export function registerCoreIpc(
   handle(TASK_ROUTES.move, (value, meta) =>
     core.moveTask(
       value as Parameters<ApplicationCore['moveTask']>[0],
+      commandContext(meta),
+    ),
+  );
+  handle(TASK_ROUTES.reorder, (value, meta) =>
+    core.reorderTasks(
+      value as Parameters<ApplicationCore['reorderTasks']>[0],
       commandContext(meta),
     ),
   );

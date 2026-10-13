@@ -104,6 +104,23 @@ describe('IP-04 DB worker runtime', () => {
         ok: true,
         result: { name: 'Core RPC project', revision: 1 },
       });
+      const listedCoreProjects = await runtime.handle({
+        protocolVersion: 1,
+        requestId: '00000000-0000-4000-8000-000000000066',
+        op: 'core.repository',
+        timeoutMs: 5_000,
+        payload: {
+          method: 'listProjects',
+          input: { limit: 10, sortBy: 'name', direction: 'asc' },
+        },
+      });
+      expect(listedCoreProjects).toMatchObject({
+        ok: true,
+        result: {
+          items: [{ name: 'Core RPC project' }, { name: 'Inbox' }],
+          nextCursor: null,
+        },
+      });
 
       const payload = {
         projectId: INBOX_ID,
@@ -130,6 +147,26 @@ describe('IP-04 DB worker runtime', () => {
         },
       });
       expect(created).toMatchObject({ ok: true });
+      const listedCoreTasks = await runtime.handle({
+        protocolVersion: 1,
+        requestId: '00000000-0000-4000-8000-000000000067',
+        op: 'core.repository',
+        timeoutMs: 5_000,
+        payload: {
+          method: 'listTasks',
+          input: {
+            projectId: INBOX_ID,
+            sortBy: 'manual',
+            direction: 'asc',
+            limit: 10,
+            now: NOW,
+          },
+        },
+      });
+      expect(listedCoreTasks).toMatchObject({
+        ok: true,
+        result: { items: [{ title: 'Worker-owned task' }], nextCursor: null },
+      });
       const receipt = await runtime.handle({
         protocolVersion: 1,
         requestId: '00000000-0000-4000-8000-000000000056',

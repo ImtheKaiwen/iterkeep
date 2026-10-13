@@ -13,10 +13,14 @@ import type {
   ActivitySnapshot,
   DecisionSnapshot,
   DocumentSnapshot,
+  Page,
+  ProjectResumeSnapshot,
   ProjectSnapshot,
+  ProjectSummary,
   ProjectStatus,
   TagSnapshot,
   TaskSnapshot,
+  TaskSummary,
   TaskStatus,
 } from './ports/core-repository.port.js';
 import type {
@@ -144,6 +148,58 @@ export class ApplicationCore {
 
   getProject(projectId: string): Promise<ProjectSnapshot | null> {
     return this.ports.repository.getProject(projectId);
+  }
+
+  listProjects(input: {
+    cursor?: string;
+    limit: number;
+    status?: readonly ProjectStatus[];
+    search?: string;
+    tagIds?: readonly string[];
+    sortBy: 'recent' | 'name' | 'status';
+    direction: 'asc' | 'desc';
+  }): Promise<Page<ProjectSummary>> {
+    return this.ports.repository.listProjects({
+      ...input,
+      ...(input.search === undefined
+        ? {}
+        : { search: input.search.trim().normalize('NFC') }),
+      ...(input.tagIds === undefined
+        ? {}
+        : { tagIds: normalizedTagIds(input.tagIds) }),
+    });
+  }
+
+  async getProjectResume(projectId: string): Promise<ProjectResumeSnapshot> {
+    const snapshot = await this.ports.repository.getProjectResume(
+      projectId,
+      this.ports.clock.now(),
+    );
+    if (!snapshot) throw new ApplicationError('NOT_FOUND');
+    return snapshot;
+  }
+
+  listTasks(input: {
+    projectId?: string;
+    status?: readonly TaskStatus[];
+    priority?: readonly Priority[];
+    tagIds?: readonly string[];
+    due?: 'overdue' | 'today' | 'upcoming' | 'no_date';
+    sortBy: 'manual' | 'due_date' | 'priority' | 'updated_at';
+    direction: 'asc' | 'desc';
+    cursor?: string;
+    limit: number;
+  }): Promise<Page<TaskSummary>> {
+    if (input.sortBy === 'manual' && input.direction !== 'asc') {
+      throw new ApplicationError('VALIDATION_FAILED');
+    }
+    return this.ports.repository.listTasks({
+      ...input,
+      ...(input.tagIds === undefined
+        ? {}
+        : { tagIds: normalizedTagIds(input.tagIds) }),
+      now: this.ports.clock.now(),
+    });
   }
 
   getTask(taskId: string): Promise<TaskSnapshot | null> {
@@ -404,6 +460,39 @@ export class ApplicationCore {
       eventId: this.ports.ids.next(),
       receiptId: this.ports.ids.next(),
       context: this.context('tasks.move', input, commandContext),
+    });
+  }
+
+  async reorderTasks(
+    input: {
+      projectId: string;
+      status: TaskStatus;
+      orderedTaskIds: readonly string[];
+      expectedRevisions: Readonly<Record<string, number>>;
+    },
+    commandContext: CommandContext,
+  ): Promise<{ readonly updatedIds: readonly string[] }> {
+    if (
+      input.orderedTaskIds.length > 250 ||
+      new Set(input.orderedTaskIds).size !== input.orderedTaskIds.length ||
+      Object.keys(input.expectedRevisions).length !==
+        input.orderedTaskIds.length ||
+      input.orderedTaskIds.some(
+        (id) =>
+          !Number.isSafeInteger(input.expectedRevisions[id]) ||
+          (input.expectedRevisions[id] ?? 0) < 1,
+      )
+    ) {
+      throw new ApplicationError('VALIDATION_FAILED');
+    }
+    assertWritableProject(
+      await this.ports.repository.getProject(input.projectId),
+    );
+    return this.ports.repository.reorderTasks({
+      ...input,
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('tasks.reorder', input, commandContext),
     });
   }
 

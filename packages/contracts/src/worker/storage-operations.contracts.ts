@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   ActorKindSchema,
   CorrelationIdSchema,
+  CursorSchema,
   IdempotencyKeySchema,
   LocalDateSchema,
   MarkdownSchema,
@@ -9,9 +10,11 @@ import {
   PositiveRevisionSchema,
   PrioritySchema,
   ProjectIdSchema,
+  ProjectStatusSchema,
   RequestIdSchema,
   TagIdSchema,
   TaskIdSchema,
+  TaskStatusSchema,
   TaskTitleSchema,
   UtcMsSchema,
   WorkspaceIdSchema,
@@ -82,8 +85,42 @@ export const CoreRepositoryDbRequestSchema = request(
       input: z.strictObject({}),
     }),
     z.strictObject({
+      method: z.literal('listProjects'),
+      input: z.strictObject({
+        cursor: CursorSchema,
+        limit: PageLimitSchema,
+        status: z.array(ProjectStatusSchema).max(4).optional(),
+        search: z.string().max(1024).optional(),
+        tagIds: RepositoryTagIdsSchema.optional(),
+        sortBy: z.enum(['recent', 'name', 'status']),
+        direction: z.enum(['asc', 'desc']),
+      }),
+    }),
+    z.strictObject({
       method: z.literal('getProject'),
       input: z.strictObject({ projectId: ProjectIdSchema }),
+    }),
+    z.strictObject({
+      method: z.literal('getProjectResume'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema,
+        computedAt: UtcMsSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('listTasks'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema.optional(),
+        status: z.array(TaskStatusSchema).max(5).optional(),
+        priority: z.array(PrioritySchema).max(5).optional(),
+        tagIds: RepositoryTagIdsSchema.optional(),
+        due: z.enum(['overdue', 'today', 'upcoming', 'no_date']).optional(),
+        sortBy: z.enum(['manual', 'due_date', 'priority', 'updated_at']),
+        direction: z.enum(['asc', 'desc']),
+        cursor: CursorSchema,
+        limit: PageLimitSchema,
+        now: UtcMsSchema,
+      }),
     }),
     z.strictObject({
       method: z.literal('getTask'),
@@ -197,6 +234,18 @@ export const CoreRepositoryDbRequestSchema = request(
           .enum(['todo', 'in_progress', 'blocked', 'done', 'cancelled'])
           .optional(),
         sortOrder: z.number().int().nonnegative().optional(),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('reorderTasks'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema,
+        status: TaskStatusSchema,
+        orderedTaskIds: z.array(TaskIdSchema).max(250),
+        expectedRevisions: z.record(TaskIdSchema, PositiveRevisionSchema),
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
         context: RepositoryContextSchema,
       }),
     }),
