@@ -111,13 +111,27 @@ interface BootstrapState {
 
 interface Window {
   readonly iterkeep: {
-    readonly system: { bootstrap(): Promise<BootstrapState> };
+    readonly system: {
+      bootstrap(): Promise<BootstrapState>;
+      health(): Promise<unknown>;
+      getDiagnostics(): Promise<unknown>;
+      openExternalUrl(input: unknown): Promise<unknown>;
+    };
     readonly workspace: {
       create(input: {
         displayName: string;
         locale: Locale;
         theme: Theme;
       }): Promise<{ workspace: WorkspaceState; setup: SetupState }>;
+      get(): Promise<unknown>;
+      listRecent(): Promise<unknown>;
+      chooseFolder(input: unknown): Promise<unknown>;
+      open(input: unknown): Promise<unknown>;
+      updatePreferences(input: unknown): Promise<unknown>;
+      getPreferences(): Promise<unknown>;
+    };
+    readonly operations: {
+      getReceipt(input: unknown): Promise<unknown>;
     };
     readonly setup: {
       get(): Promise<SetupState>;
@@ -230,6 +244,108 @@ interface Window {
         taskId: string;
         expectedRevision: number;
       }): Promise<RevisionReceipt>;
+    };
+    readonly documents: {
+      list(input: unknown): Promise<unknown>;
+      get(input: unknown): Promise<unknown>;
+      create(input: unknown): Promise<unknown>;
+      save(input: unknown): Promise<unknown>;
+      versions(input: unknown): Promise<unknown>;
+      trash(input: unknown): Promise<unknown>;
+      restore(input: unknown): Promise<unknown>;
+    };
+    readonly decisions: {
+      list(input: unknown): Promise<unknown>;
+      get(input: unknown): Promise<unknown>;
+      create(input: unknown): Promise<unknown>;
+      revise(input: unknown): Promise<unknown>;
+      supersede(input: unknown): Promise<unknown>;
+    };
+    readonly activity: {
+      list(input: unknown): Promise<unknown>;
+      get(input: unknown): Promise<unknown>;
+      append(input: unknown): Promise<unknown>;
+    };
+    readonly records: {
+      link(input: unknown): Promise<unknown>;
+      unlink(input: unknown): Promise<unknown>;
+    };
+    readonly attachments: {
+      list(input: unknown): Promise<unknown>;
+      import(input: unknown): Promise<unknown>;
+      reveal(input: unknown): Promise<unknown>;
+      trash(input: unknown): Promise<unknown>;
+    };
+    readonly search: { query(input: unknown): Promise<unknown> };
+    readonly files: {
+      chooseImport(input: unknown): Promise<unknown>;
+      chooseExportTarget(input: unknown): Promise<unknown>;
+    };
+    readonly transfer: {
+      previewImport(input: unknown): Promise<unknown>;
+      commitImport(input: unknown): Promise<unknown>;
+      exportMarkdown(input: unknown): Promise<unknown>;
+      getImportPreview(input: unknown): Promise<unknown>;
+    };
+    readonly git: {
+      listProfiles(): Promise<unknown>;
+      getStatus(input: unknown): Promise<unknown>;
+      commitExport(input: unknown): Promise<unknown>;
+      pushExport(input: unknown): Promise<unknown>;
+    };
+    readonly backups: {
+      create(input: unknown): Promise<unknown>;
+      list(input: unknown): Promise<unknown>;
+      previewRestore(input: unknown): Promise<unknown>;
+      commitRestore(input: unknown): Promise<unknown>;
+    };
+    readonly jobs: {
+      get(input: unknown): Promise<unknown>;
+      list(input: unknown): Promise<unknown>;
+      cancel(input: unknown): Promise<unknown>;
+    };
+    readonly capabilities: {
+      get(input: unknown): Promise<unknown>;
+      setPreference(input: unknown): Promise<unknown>;
+    };
+    readonly models: {
+      detectOllama(): Promise<unknown>;
+      listInstalled(): Promise<unknown>;
+      listRecommended(input: unknown): Promise<unknown>;
+      setActive(input: unknown): Promise<unknown>;
+      startDownload(input: unknown): Promise<unknown>;
+      cancelDownload(input: unknown): Promise<unknown>;
+      runBenchmark(input: unknown): Promise<unknown>;
+    };
+    readonly conversations: {
+      list(input: unknown): Promise<unknown>;
+      get(input: unknown): Promise<unknown>;
+      create(input: unknown): Promise<unknown>;
+    };
+    readonly agent: {
+      startRun(input: unknown): Promise<unknown>;
+      getRun(input: unknown): Promise<unknown>;
+      cancelRun(input: unknown): Promise<unknown>;
+      getToolCalls(input: unknown): Promise<unknown>;
+      getApprovals(input: unknown): Promise<unknown>;
+      decideApproval(input: unknown): Promise<unknown>;
+    };
+    readonly voice: {
+      getStatus(): Promise<unknown>;
+      listComponents(input: unknown): Promise<unknown>;
+      startComponentInstall(input: unknown): Promise<unknown>;
+      startCapture(input: unknown): Promise<unknown>;
+      appendChunk(input: unknown): Promise<unknown>;
+      stopCapture(input: unknown): Promise<unknown>;
+      cancelCapture(input: unknown): Promise<unknown>;
+      getTranscript(input: unknown): Promise<unknown>;
+      speak(input: unknown): Promise<unknown>;
+    };
+    readonly events: {
+      subscribe(input: unknown): Promise<unknown>;
+      unsubscribe(input: unknown): Promise<unknown>;
+      getSince(input: unknown): Promise<unknown>;
+      onEvent(listener: (payload: unknown) => void): () => void;
     };
   };
 }

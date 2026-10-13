@@ -42,6 +42,7 @@ function errorCode(error: unknown): string {
     'payload.too_large': 'PAYLOAD_TOO_LARGE',
     'rate.limited': 'RATE_LIMITED',
     'workspace.already_exists': 'ALREADY_EXISTS',
+    'capability.disabled': 'CAPABILITY_DISABLED',
     'storage.timeout': 'TIMEOUT',
     'storage.unavailable': 'DB_WORKER_UNAVAILABLE',
   };

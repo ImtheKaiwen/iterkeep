@@ -6,11 +6,13 @@ import {
 } from './native-smoke-mode.js';
 import { createApplicationCore } from './application-runtime.js';
 import { registerCoreIpc } from './core-ipc.js';
+import { registerFutureIpc } from './future-ipc.js';
 import { DatabaseClient, registerSetupIpc } from './setup-ipc.js';
 
 let mainWindow: BrowserWindow | null = null;
 let disposeSetupIpc: (() => Promise<void>) | undefined;
 let disposeCoreIpc: (() => void) | undefined;
+let disposeFutureIpc: (() => void) | undefined;
 let database: DatabaseClient | undefined;
 
 function createMainWindow(): BrowserWindow {
@@ -77,6 +79,7 @@ void app.whenReady().then(async () => {
     () => mainWindow,
     createApplicationCore(database),
   );
+  disposeFutureIpc = registerFutureIpc(() => mainWindow);
   mainWindow.once('closed', () => {
     mainWindow = null;
   });
@@ -91,6 +94,7 @@ void app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  disposeFutureIpc?.();
   disposeCoreIpc?.();
   if (disposeSetupIpc) void disposeSetupIpc();
   if (database) void database.close();

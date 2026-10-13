@@ -1,4 +1,6 @@
 export * from './ipc/project.contracts.js';
+export * from './ipc/future.contracts.js';
+export * from './ipc/manifest.contracts.js';
 export * from './ipc/setup.contracts.js';
 export * from './ipc/task.contracts.js';
 export * from './shared/result.js';

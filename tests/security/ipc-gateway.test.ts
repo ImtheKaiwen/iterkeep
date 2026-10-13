@@ -1,5 +1,6 @@
+import fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { PROJECT_ROUTES, SETUP_ROUTES, TASK_ROUTES } from '@iterkeep/contracts';
+import { IPC_ROUTE_COUNT, IPC_ROUTES } from '@iterkeep/contracts';
 import {
   IpcRateLimiter,
   measureStructuredValue,
@@ -7,15 +8,26 @@ import {
 
 describe('IPC gateway guards', () => {
   it('uses versioned, statically named channels', () => {
-    const channels = [
-      ...Object.values(SETUP_ROUTES),
-      ...Object.values(PROJECT_ROUTES),
-      ...Object.values(TASK_ROUTES),
-    ].map((route) => route.channel);
+    const channels = Object.values(IPC_ROUTES).map((route) => route.channel);
+    expect(channels).toHaveLength(IPC_ROUTE_COUNT);
     expect(new Set(channels).size).toBe(channels.length);
     expect(
       channels.every((channel) => channel.startsWith('iterkeep:v1:')),
     ).toBe(true);
+  });
+
+  it('matches every canonical DOC-11 invoke channel', async () => {
+    const document = await fs.readFile('docs/11-IPC-CONTRACTS.md', 'utf8');
+    const documented = [
+      ...document.matchAll(/^\| `[^`]+\(\)` \| `([^`]+)` \|/gmu),
+    ]
+      .map((match) => `iterkeep:v1:${match[1]}`)
+      .sort();
+    const implemented = Object.values(IPC_ROUTES)
+      .map((route) => route.channel)
+      .sort();
+    expect(documented).toHaveLength(IPC_ROUTE_COUNT);
+    expect(implemented).toEqual(documented);
   });
 
   it('rejects excessive depth, property counts, and cycles before parsing', () => {
