@@ -2,15 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
-
-const IPC_CHANNELS = [
-  'iterkeep:system.bootstrap',
-  'iterkeep:workspace.create',
-  'iterkeep:setup.get',
-  'iterkeep:setup.saveStep',
-  'iterkeep:setup.complete',
-] as const;
+import { app, BrowserWindow, ipcMain } from 'electron';
+import { SETUP_ROUTES } from '@iterkeep/contracts';
+import { IpcRateLimiter } from './ipc/ipc-guards.js';
+import { registerValidatedIpc } from './ipc/ipc-gateway.js';
 
 interface WorkerReply {
   readonly requestId: string;
@@ -34,6 +29,16 @@ interface WorkspaceState {
   readonly inboxProjectId: string;
   readonly locale: 'tr-TR' | 'en-US';
   readonly theme: 'system' | 'light' | 'dark';
+}
+
+function workspaceSummary(workspace: WorkspaceState): WorkspaceState {
+  return {
+    id: workspace.id,
+    displayName: workspace.displayName,
+    inboxProjectId: workspace.inboxProjectId,
+    locale: workspace.locale,
+    theme: workspace.theme,
+  };
 }
 
 type PendingRequest = {
@@ -99,7 +104,7 @@ class SetupDatabaseClient {
       now,
     })) as WorkspaceState;
     const setup = (await this.request('setup.read', {})) as SetupState;
-    return { workspace, setup };
+    return { workspace: workspaceSummary(workspace), setup };
   }
 
   async close(): Promise<void> {
@@ -171,44 +176,27 @@ class SetupDatabaseClient {
   }
 }
 
-function parseCreateInput(value: unknown): {
+function createInput(value: unknown): {
   displayName: string;
   locale: 'tr-TR' | 'en-US';
   theme: 'system' | 'light' | 'dark';
 } {
-  if (!value || typeof value !== 'object') throw new Error('validation.failed');
   const input = value as Record<string, unknown>;
-  const displayName =
-    typeof input.displayName === 'string' ? input.displayName.trim() : '';
-  if (displayName.length < 1 || displayName.length > 120)
-    throw new Error('validation.failed');
-  if (input.locale !== 'tr-TR' && input.locale !== 'en-US')
-    throw new Error('validation.failed');
-  if (!['system', 'light', 'dark'].includes(String(input.theme)))
-    throw new Error('validation.failed');
   return {
-    displayName,
-    locale: input.locale,
+    displayName: input.displayName as string,
+    locale: input.locale as 'tr-TR' | 'en-US',
     theme: input.theme as 'system' | 'light' | 'dark',
   };
 }
 
 function parseSetupMutation(value: unknown, choice: 'none' | 'ai' | 'voice') {
-  if (!value || typeof value !== 'object') throw new Error('validation.failed');
   const input = value as Record<string, unknown>;
-  if (
-    !Number.isInteger(input.expectedRevision) ||
-    Number(input.expectedRevision) < 1
-  )
-    throw new Error('validation.failed');
   const result: Record<string, unknown> = {
     expectedRevision: input.expectedRevision,
     now: new Date().toISOString(),
   };
   if (choice === 'none') return result;
   const key = choice === 'ai' ? 'aiSetupChoice' : 'voiceSetupChoice';
-  if (input[key] !== 'enabled' && input[key] !== 'skipped')
-    throw new Error('validation.failed');
   result[key] = input[key];
   result.step = choice;
   return result;
@@ -218,56 +206,44 @@ export function registerSetupIpc(
   getWindow: () => BrowserWindow | null,
 ): () => Promise<void> {
   const database = new SetupDatabaseClient();
-  const assertTrusted = (event: IpcMainInvokeEvent) => {
-    const window = getWindow();
-    if (
-      !window ||
-      event.sender !== window.webContents ||
-      event.senderFrame !== window.webContents.mainFrame
-    )
-      throw new Error('permission.denied');
-  };
+  const limiter = new IpcRateLimiter();
   const handle = (
-    channel: (typeof IPC_CHANNELS)[number],
+    route: (typeof SETUP_ROUTES)[keyof typeof SETUP_ROUTES],
     listener: (value: unknown) => Promise<unknown>,
-  ) => {
-    ipcMain.handle(channel, async (event, value) => {
-      assertTrusted(event);
-      return listener(value);
-    });
-  };
+  ) => registerValidatedIpc(route, getWindow, limiter, listener);
 
-  handle('iterkeep:system.bootstrap', async () => {
+  handle(SETUP_ROUTES.systemBootstrap, async () => {
     if (!(await database.exists()))
       return { workspaceReady: false, workspace: null, setup: null };
     const [workspace, setup] = await Promise.all([
       database.request('workspace.read', {}),
       database.request('setup.read', {}),
     ]);
-    return { workspaceReady: true, workspace, setup };
+    return {
+      workspaceReady: true,
+      workspace: workspaceSummary(workspace as WorkspaceState),
+      setup,
+    };
   });
-  handle('iterkeep:workspace.create', (value) =>
-    database.create(parseCreateInput(value)),
+  handle(SETUP_ROUTES.workspaceCreate, (value) =>
+    database.create(createInput(value)),
   );
-  handle('iterkeep:setup.get', () => database.request('setup.read', {}));
-  handle('iterkeep:setup.saveStep', (value) => {
-    if (!value || typeof value !== 'object')
-      throw new Error('validation.failed');
+  handle(SETUP_ROUTES.setupGet, () => database.request('setup.read', {}));
+  handle(SETUP_ROUTES.setupSaveStep, (value) => {
     const step = (value as Record<string, unknown>).step;
-    if (step !== 'system_check' && step !== 'ai' && step !== 'voice')
-      throw new Error('validation.failed');
     const parsed = parseSetupMutation(
       value,
       step === 'ai' ? 'ai' : step === 'voice' ? 'voice' : 'none',
     );
     return database.request('setup.save_step', { ...parsed, step });
   });
-  handle('iterkeep:setup.complete', (value) =>
+  handle(SETUP_ROUTES.setupComplete, (value) =>
     database.request('setup.complete', parseSetupMutation(value, 'none')),
   );
 
   return async () => {
-    for (const channel of IPC_CHANNELS) ipcMain.removeHandler(channel);
+    for (const route of Object.values(SETUP_ROUTES))
+      ipcMain.removeHandler(route.channel);
     await database.close();
   };
 }

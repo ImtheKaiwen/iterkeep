@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import {
   getNativeSmokeRunId,
   runPackagedNativeSmoke,
@@ -21,11 +21,16 @@ function createMainWindow(): BrowserWindow {
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.cjs'),
       sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
     },
     width: 1280,
   });
 
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-attach-webview', (event) =>
+    event.preventDefault(),
+  );
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== window.webContents.getURL()) event.preventDefault();
   });
@@ -57,6 +62,10 @@ void app.whenReady().then(async () => {
     }
     return;
   }
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, _permission, callback) => callback(false),
+  );
   mainWindow = createMainWindow();
   disposeSetupIpc = registerSetupIpc(() => mainWindow);
   mainWindow.once('closed', () => {

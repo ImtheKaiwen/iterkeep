@@ -12,6 +12,9 @@ describe('Electron baseline policy', () => {
     expect(main).toContain('contextIsolation: true');
     expect(main).toContain('nodeIntegration: false');
     expect(main).toContain('sandbox: true');
+    expect(main).toContain('webSecurity: true');
+    expect(main).toContain('webviewTag: false');
+    expect(main).toContain('setPermissionRequestHandler');
   });
 
   it('exposes only named setup methods through the preload bridge', async () => {
@@ -21,7 +24,20 @@ describe('Electron baseline policy', () => {
     );
 
     expect(preload).toContain("contextBridge.exposeInMainWorld('iterkeep'");
-    expect(preload).not.toMatch(/invoke\([^'"]/u);
+    expect(preload).not.toMatch(/exposeInMainWorld\([^]*invoke:\s*/u);
+    expect(preload).not.toContain('channel: string');
     expect(preload).not.toContain('ipcRenderer.send');
+    expect(preload).toContain('SETUP_ROUTES');
+  });
+
+  it('uses a restrictive renderer content security policy', async () => {
+    const html = await fs.readFile(
+      path.join(process.cwd(), 'apps/desktop/index.html'),
+      'utf8',
+    );
+    expect(html).toContain("script-src 'self'");
+    expect(html).toContain("object-src 'none'");
+    expect(html).not.toContain('unsafe-eval');
+    expect(html).not.toContain('unsafe-inline');
   });
 });
