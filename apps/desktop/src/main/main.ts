@@ -4,6 +4,10 @@ import {
   getNativeSmokeRunId,
   runPackagedNativeSmoke,
 } from './native-smoke-mode.js';
+import {
+  getPackagedIpcSmokeRequest,
+  runPackagedIpcSmoke,
+} from './packaged-ipc-smoke-mode.js';
 import { createApplicationCore } from './application-runtime.js';
 import { registerCoreIpc } from './core-ipc.js';
 import { registerFutureIpc } from './future-ipc.js';
@@ -14,8 +18,12 @@ let disposeSetupIpc: (() => Promise<void>) | undefined;
 let disposeCoreIpc: (() => void) | undefined;
 let disposeFutureIpc: (() => void) | undefined;
 let database: DatabaseClient | undefined;
+const ipcSmokeRequest = getPackagedIpcSmokeRequest(process.argv);
+if (ipcSmokeRequest) {
+  app.setPath('userData', path.join(ipcSmokeRequest.runDirectory, 'user-data'));
+}
 
-function createMainWindow(): BrowserWindow {
+function createMainWindow(show = true): BrowserWindow {
   const window = new BrowserWindow({
     height: 800,
     minHeight: 640,
@@ -40,7 +48,7 @@ function createMainWindow(): BrowserWindow {
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== window.webContents.getURL()) event.preventDefault();
   });
-  window.once('ready-to-show', () => window.show());
+  if (show) window.once('ready-to-show', () => window.show());
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -72,7 +80,7 @@ void app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
   );
-  mainWindow = createMainWindow();
+  mainWindow = createMainWindow(!ipcSmokeRequest);
   database = new DatabaseClient();
   disposeSetupIpc = registerSetupIpc(() => mainWindow, database);
   disposeCoreIpc = registerCoreIpc(
@@ -80,6 +88,18 @@ void app.whenReady().then(async () => {
     createApplicationCore(database),
   );
   disposeFutureIpc = registerFutureIpc(() => mainWindow);
+  if (ipcSmokeRequest) {
+    try {
+      await runPackagedIpcSmoke(ipcSmokeRequest, mainWindow);
+      await database.close();
+      app.exit(0);
+    } catch (error) {
+      console.error(error);
+      await database.close();
+      app.exit(1);
+    }
+    return;
+  }
   mainWindow.once('closed', () => {
     mainWindow = null;
   });

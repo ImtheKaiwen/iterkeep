@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { randomUUID } from 'node:crypto';
 import {
   FUTURE_ROUTES,
   PROJECT_ROUTES,
@@ -13,11 +12,11 @@ interface Route {
 }
 
 async function invoke(route: Route, payload: unknown, mutation = false) {
-  const requestId = randomUUID();
+  const requestId = globalThis.crypto.randomUUID();
   const result = await ipcRenderer.invoke(route.channel, {
     protocolVersion: 1,
     requestId,
-    ...(mutation ? { idempotencyKey: randomUUID() } : {}),
+    ...(mutation ? { idempotencyKey: globalThis.crypto.randomUUID() } : {}),
     payload,
   });
   const parsed = route.response.parse(result) as

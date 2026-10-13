@@ -30,6 +30,8 @@ describe('Electron baseline policy', () => {
     expect(preload).toContain('SETUP_ROUTES');
     expect(preload).toContain('PROJECT_ROUTES');
     expect(preload).toContain('TASK_ROUTES');
+    expect(preload).toContain('FUTURE_ROUTES');
+    expect(preload).not.toContain("from 'node:crypto'");
   });
 
   it('uses a restrictive renderer content security policy', async () => {

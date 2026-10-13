@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { ipcMain, type BrowserWindow } from 'electron';
+import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { FAILURE_CODES } from '@iterkeep/contracts';
-import type { z } from 'zod';
+import { ZodError, type z } from 'zod';
 import {
   assertTrustedInvokeSender,
   IpcRateLimiter,
@@ -34,11 +34,13 @@ function requestIdFrom(raw: unknown): string {
 }
 
 function errorCode(error: unknown): string {
+  if (error instanceof ZodError) return 'VALIDATION_FAILED';
   if (!(error instanceof Error)) return 'INTERNAL_ERROR';
   if (knownCodes.has(error.message)) return error.message;
   const direct: Record<string, string> = {
     'permission.denied': 'PERMISSION_DENIED',
     'validation.failed': 'VALIDATION_FAILED',
+    'protocol.unsupported': 'UNSUPPORTED_PROTOCOL',
     'payload.too_large': 'PAYLOAD_TOO_LARGE',
     'rate.limited': 'RATE_LIMITED',
     'workspace.already_exists': 'ALREADY_EXISTS',
@@ -81,41 +83,60 @@ export function registerValidatedIpc(
   limiter: IpcRateLimiter,
   listener: (payload: unknown, meta: GatewayRequestMeta) => Promise<unknown>,
 ): void {
-  ipcMain.handle(route.channel, async (event, raw: unknown) => {
-    const fallbackRequestId = requestIdFrom(raw);
-    try {
-      assertTrustedInvokeSender(event, getWindow());
-      const bytes = measureStructuredValue(raw, {
-        maxDepth: 24,
-        maxProperties: 2_000,
-      });
-      if (bytes > route.limitBytes) throw new Error('payload.too_large');
-      limiter.assertAllowed(
-        `${event.sender.id}:${route.channel}`,
-        route.rateLimit,
-      );
-      const request = route.request.parse(raw) as {
-        requestId: string;
-        idempotencyKey?: string;
-        payload: unknown;
-      };
-      const result = {
-        ok: true as const,
-        data: await listener(request.payload, {
-          requestId: request.requestId,
-          ...(request.idempotencyKey
-            ? { idempotencyKey: request.idempotencyKey }
-            : {}),
-        }),
-        meta: {
-          requestId: request.requestId,
-          serverTime: new Date().toISOString(),
-          protocolVersion: 1 as const,
-        },
-      };
-      return route.response.parse(result);
-    } catch (error) {
-      return route.response.parse(failure(fallbackRequestId, error));
+  ipcMain.handle(route.channel, (event, raw: unknown) =>
+    handleValidatedIpc(route, event, getWindow(), limiter, listener, raw),
+  );
+}
+
+export async function handleValidatedIpc(
+  route: Route,
+  event: IpcMainInvokeEvent,
+  window: BrowserWindow | null,
+  limiter: IpcRateLimiter,
+  listener: (payload: unknown, meta: GatewayRequestMeta) => Promise<unknown>,
+  raw: unknown,
+): Promise<unknown> {
+  const fallbackRequestId = requestIdFrom(raw);
+  try {
+    assertTrustedInvokeSender(event, window);
+    const bytes = measureStructuredValue(raw, {
+      maxDepth: 24,
+      maxProperties: 2_000,
+    });
+    if (bytes > route.limitBytes) throw new Error('payload.too_large');
+    limiter.assertAllowed(
+      `${event.sender.id}:${route.channel}`,
+      route.rateLimit,
+    );
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      'protocolVersion' in raw &&
+      (raw as { protocolVersion?: unknown }).protocolVersion !== 1
+    ) {
+      throw new Error('protocol.unsupported');
     }
-  });
+    const request = route.request.parse(raw) as {
+      requestId: string;
+      idempotencyKey?: string;
+      payload: unknown;
+    };
+    const result = {
+      ok: true as const,
+      data: await listener(request.payload, {
+        requestId: request.requestId,
+        ...(request.idempotencyKey
+          ? { idempotencyKey: request.idempotencyKey }
+          : {}),
+      }),
+      meta: {
+        requestId: request.requestId,
+        serverTime: new Date().toISOString(),
+        protocolVersion: 1 as const,
+      },
+    };
+    return route.response.parse(result);
+  } catch (error) {
+    return route.response.parse(failure(fallbackRequestId, error));
+  }
 }

@@ -17,6 +17,7 @@
     "build": "tsc -b && npm --workspace=@iterkeep/desktop run build",
     "make": "tsc -b && npm --workspace=@iterkeep/desktop run make",
     "native:smoke": "node scripts/native-smoke.mjs",
+    "ipc:smoke": "node scripts/packaged-ipc-smoke.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",
     "lint:boundaries": "node scripts/check-import-boundaries.mjs && node scripts/check-package-graph.mjs",
@@ -28,9 +29,10 @@
     "test:resilience": "vitest run tests/resilience",
     "test:security": "vitest run tests/security",
     "test:performance": "node tests/performance/run-benchmarks.mjs",
+    "verify:ipc": "node scripts/verify-ipc.mjs",
     "verify:docs": "node scripts/verify-doc-links.mjs",
     "verify:artifact": "node scripts/verify-artifact-layout.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run lint:boundaries && npm test && npm run verify:docs"
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run lint:boundaries && npm test && npm run verify:ipc && npm run verify:docs"
   },
   "devDependencies": {
     "@babel/parser": "8.0.7",
