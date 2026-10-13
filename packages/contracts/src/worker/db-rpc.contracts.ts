@@ -5,6 +5,9 @@ import { UuidV4Schema } from '../shared/value-schemas.js';
 export const DB_OPERATIONS = [
   'workspace.bootstrap',
   'workspace.read',
+  'setup.read',
+  'setup.save_step',
+  'setup.complete',
   'projects.create',
   'projects.read',
   'projects.list',

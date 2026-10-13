@@ -13,4 +13,15 @@ describe('Electron baseline policy', () => {
     expect(main).toContain('nodeIntegration: false');
     expect(main).toContain('sandbox: true');
   });
+
+  it('exposes only named setup methods through the preload bridge', async () => {
+    const preload = await fs.readFile(
+      path.join(process.cwd(), 'apps/desktop/src/preload/preload.ts'),
+      'utf8',
+    );
+
+    expect(preload).toContain("contextBridge.exposeInMainWorld('iterkeep'");
+    expect(preload).not.toMatch(/invoke\([^'"]/u);
+    expect(preload).not.toContain('ipcRenderer.send');
+  });
 });

@@ -14,9 +14,12 @@ import {
   lookupReceiptStatus,
   openDatabase,
   passiveCheckpoint,
+  readSetupState,
   readTask,
   readWorkspace,
   renameTask,
+  saveSetupStep,
+  completeSetup,
   StorageError,
   verifyDatabaseIntegrity,
   type MigrationEntry,
@@ -155,6 +158,12 @@ export class DatabaseWorkerRuntime {
       }
       case 'workspace.read':
         return readWorkspace(this.#db);
+      case 'setup.read':
+        return readSetupState(this.#db);
+      case 'setup.save_step':
+        return saveSetupStep(this.#db, request.payload);
+      case 'setup.complete':
+        return completeSetup(this.#db, request.payload);
       case 'tasks.create': {
         const { payloadHash, ...command } = request.payload;
         const payload = {

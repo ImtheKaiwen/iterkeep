@@ -4,6 +4,10 @@ import {
   getNativeSmokeRunId,
   runPackagedNativeSmoke,
 } from './native-smoke-mode.js';
+import { registerSetupIpc } from './setup-ipc.js';
+
+let mainWindow: BrowserWindow | null = null;
+let disposeSetupIpc: (() => Promise<void>) | undefined;
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -53,10 +57,23 @@ void app.whenReady().then(async () => {
     }
     return;
   }
-  createMainWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+  mainWindow = createMainWindow();
+  disposeSetupIpc = registerSetupIpc(() => mainWindow);
+  mainWindow.once('closed', () => {
+    mainWindow = null;
   });
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = createMainWindow();
+      mainWindow.once('closed', () => {
+        mainWindow = null;
+      });
+    }
+  });
+});
+
+app.on('before-quit', () => {
+  if (disposeSetupIpc) void disposeSetupIpc();
 });
 
 app.on('window-all-closed', () => {

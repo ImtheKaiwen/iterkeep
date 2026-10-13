@@ -5,6 +5,8 @@ export interface BootstrapWorkspaceCommand {
   readonly workspaceId: string;
   readonly inboxProjectId: string;
   readonly displayName: string;
+  readonly locale?: 'tr-TR' | 'en-US';
+  readonly theme?: 'system' | 'light' | 'dark';
   readonly timezone: string;
   readonly now: string;
 }
@@ -15,6 +17,9 @@ export interface WorkspaceRecord {
   readonly inboxProjectId: string;
   readonly schemaCompatibilityVersion: number;
   readonly revision: number;
+  readonly locale: 'tr-TR' | 'en-US';
+  readonly theme: 'system' | 'light' | 'dark';
+  readonly timezone: string;
 }
 
 interface WorkspaceRow {
@@ -23,6 +28,9 @@ interface WorkspaceRow {
   readonly inbox_project_id: string;
   readonly schema_compatibility_version: number;
   readonly revision: number;
+  readonly locale: WorkspaceRecord['locale'];
+  readonly theme: WorkspaceRecord['theme'];
+  readonly timezone: string;
 }
 
 function mapWorkspace(row: WorkspaceRow): WorkspaceRecord {
@@ -32,6 +40,9 @@ function mapWorkspace(row: WorkspaceRow): WorkspaceRecord {
     inboxProjectId: row.inbox_project_id,
     schemaCompatibilityVersion: row.schema_compatibility_version,
     revision: row.revision,
+    locale: row.locale,
+    theme: row.theme,
+    timezone: row.timezone,
   };
 }
 
@@ -64,9 +75,14 @@ export function bootstrapWorkspace(
       command.now,
     );
     db.prepare(
-      `INSERT INTO workspace_preferences(workspace_id,timezone)
-       VALUES (?,?)`,
-    ).run(command.workspaceId, command.timezone);
+      `INSERT INTO workspace_preferences(workspace_id,locale,theme,timezone)
+       VALUES (?,?,?,?)`,
+    ).run(
+      command.workspaceId,
+      command.locale ?? 'tr-TR',
+      command.theme ?? 'system',
+      command.timezone,
+    );
     db.prepare(
       `INSERT INTO setup_state(workspace_id,updated_at) VALUES (?,?)`,
     ).run(command.workspaceId, command.now);
@@ -85,9 +101,11 @@ export function bootstrapWorkspace(
 export function readWorkspace(db: Database.Database): WorkspaceRecord {
   const row = db
     .prepare<[], WorkspaceRow>(
-      `SELECT id,display_name,inbox_project_id,
-              schema_compatibility_version,revision
-       FROM workspaces`,
+      `SELECT w.id,w.display_name,w.inbox_project_id,
+              w.schema_compatibility_version,w.revision,
+              p.locale,p.theme,p.timezone
+       FROM workspaces w
+       JOIN workspace_preferences p ON p.workspace_id=w.id`,
     )
     .get();
   if (!row) throw new Error('WORKSPACE_UNAVAILABLE');

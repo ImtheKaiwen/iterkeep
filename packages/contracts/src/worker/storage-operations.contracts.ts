@@ -54,6 +54,8 @@ export const WorkspaceBootstrapDbRequestSchema = request(
     workspaceId: WorkspaceIdSchema,
     inboxProjectId: ProjectIdSchema,
     displayName: z.string().trim().min(1).max(120),
+    locale: z.enum(['tr-TR', 'en-US']).default('tr-TR'),
+    theme: z.enum(['system', 'light', 'dark']).default('system'),
     timezone: z.string().min(1).max(100),
     now: UtcMsSchema,
   }),
@@ -61,6 +63,27 @@ export const WorkspaceBootstrapDbRequestSchema = request(
 export const WorkspaceReadDbRequestSchema = request(
   'workspace.read',
   z.strictObject({}),
+);
+export const SetupReadDbRequestSchema = request(
+  'setup.read',
+  z.strictObject({}),
+);
+export const SetupSaveStepDbRequestSchema = request(
+  'setup.save_step',
+  z.strictObject({
+    step: z.enum(['welcome', 'workspace', 'system_check', 'ai', 'voice']),
+    aiSetupChoice: z.enum(['enabled', 'skipped']).optional(),
+    voiceSetupChoice: z.enum(['enabled', 'skipped']).optional(),
+    expectedRevision: PositiveRevisionSchema,
+    now: UtcMsSchema,
+  }),
+);
+export const SetupCompleteDbRequestSchema = request(
+  'setup.complete',
+  z.strictObject({
+    expectedRevision: PositiveRevisionSchema,
+    now: UtcMsSchema,
+  }),
 );
 export const TaskCreateDbRequestSchema = request(
   'tasks.create',
@@ -121,6 +144,9 @@ export const MaintenanceQuickCheckDbRequestSchema = request(
 export const StorageDbWorkerRequestSchema = z.discriminatedUnion('op', [
   WorkspaceBootstrapDbRequestSchema,
   WorkspaceReadDbRequestSchema,
+  SetupReadDbRequestSchema,
+  SetupSaveStepDbRequestSchema,
+  SetupCompleteDbRequestSchema,
   TaskCreateDbRequestSchema,
   TaskReadDbRequestSchema,
   TaskUpdateDbRequestSchema,
