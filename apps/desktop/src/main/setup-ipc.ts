@@ -47,7 +47,7 @@ type PendingRequest = {
   readonly timeout: ReturnType<typeof setTimeout>;
 };
 
-class SetupDatabaseClient {
+export class DatabaseClient {
   readonly #databasePath = path.join(
     app.getPath('userData'),
     'workspace',
@@ -204,8 +204,8 @@ function parseSetupMutation(value: unknown, choice: 'none' | 'ai' | 'voice') {
 
 export function registerSetupIpc(
   getWindow: () => BrowserWindow | null,
+  database: DatabaseClient,
 ): () => Promise<void> {
-  const database = new SetupDatabaseClient();
   const limiter = new IpcRateLimiter();
   const handle = (
     route: (typeof SETUP_ROUTES)[keyof typeof SETUP_ROUTES],
@@ -244,6 +244,5 @@ export function registerSetupIpc(
   return async () => {
     for (const route of Object.values(SETUP_ROUTES))
       ipcMain.removeHandler(route.channel);
-    await database.close();
   };
 }

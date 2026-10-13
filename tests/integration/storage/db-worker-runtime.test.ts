@@ -60,6 +60,50 @@ describe('IP-04 DB worker runtime', () => {
       });
       expect(bootstrap.ok).toBe(true);
 
+      const coreProject = await runtime.handle({
+        protocolVersion: 1,
+        requestId: '00000000-0000-4000-8000-000000000059',
+        op: 'core.repository',
+        timeoutMs: 5_000,
+        payload: {
+          method: 'createProject',
+          input: {
+            id: '00000000-0000-4000-8000-000000000060',
+            eventId: '00000000-0000-4000-8000-000000000061',
+            receiptId: '00000000-0000-4000-8000-000000000062',
+            workspaceId: WORKSPACE_ID,
+            name: 'Core RPC project',
+            description: '',
+            slug: 'core-rpc-project',
+            priority: 'none',
+            context: {
+              actorKind: 'user',
+              actorRef: 'local-user',
+              correlationId: '00000000-0000-4000-8000-000000000063',
+              idempotencyKey: '00000000-0000-4000-8000-000000000064',
+              payloadHash: 'a'.repeat(64),
+              now: NOW,
+              expiresAt: EXPIRES_AT,
+            },
+          },
+        },
+      });
+      expect(coreProject).toMatchObject({ ok: true });
+      const readCoreProject = await runtime.handle({
+        protocolVersion: 1,
+        requestId: '00000000-0000-4000-8000-000000000065',
+        op: 'core.repository',
+        timeoutMs: 5_000,
+        payload: {
+          method: 'getProject',
+          input: { projectId: '00000000-0000-4000-8000-000000000060' },
+        },
+      });
+      expect(readCoreProject).toMatchObject({
+        ok: true,
+        result: { name: 'Core RPC project', revision: 1 },
+      });
+
       const payload = {
         projectId: INBOX_ID,
         title: 'Worker-owned task',

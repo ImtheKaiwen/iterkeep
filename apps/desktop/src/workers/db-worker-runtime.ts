@@ -19,6 +19,7 @@ import {
   readWorkspace,
   renameTask,
   saveSetupStep,
+  SqliteCoreRepository,
   completeSetup,
   StorageError,
   verifyDatabaseIntegrity,
@@ -105,6 +106,7 @@ export class DatabaseWorkerRuntime {
   readonly #db: ReturnType<typeof openDatabase>;
   readonly #ownership: WorkspaceOwnership;
   readonly #nativeBindingPath: string | undefined;
+  readonly #coreRepository: SqliteCoreRepository;
   #closed = false;
 
   constructor(options: DatabaseWorkerRuntimeOptions) {
@@ -119,6 +121,7 @@ export class DatabaseWorkerRuntime {
           : {}),
       });
       ensureMigration(this.#db, options.migration, options.appliedAt);
+      this.#coreRepository = new SqliteCoreRepository(this.#db);
       if (options.intent === 'open_existing') verifyDatabaseIntegrity(this.#db);
     } catch (error) {
       this.#ownership.release();
@@ -158,6 +161,83 @@ export class DatabaseWorkerRuntime {
       }
       case 'workspace.read':
         return readWorkspace(this.#db);
+      case 'core.repository': {
+        const operation = request.payload;
+        switch (operation.method) {
+          case 'getWorkspace':
+            return this.#coreRepository.getWorkspace();
+          case 'getProject':
+            return this.#coreRepository.getProject(operation.input.projectId);
+          case 'getTask':
+            return this.#coreRepository.getTask(operation.input.taskId);
+          case 'createProject':
+            return this.#coreRepository.createProject(operation.input);
+          case 'updateProject':
+            return this.#coreRepository.updateProject({
+              ...operation.input,
+              patch: {
+                ...(operation.input.patch.name === undefined
+                  ? {}
+                  : { name: operation.input.patch.name }),
+                ...(operation.input.patch.description === undefined
+                  ? {}
+                  : { description: operation.input.patch.description }),
+                ...(operation.input.patch.priority === undefined
+                  ? {}
+                  : { priority: operation.input.patch.priority }),
+              },
+            });
+          case 'changeProjectStatus':
+            return this.#coreRepository.changeProjectStatus(operation.input);
+          case 'setProjectDeleted':
+            return this.#coreRepository.setProjectDeleted(operation.input);
+          case 'createTask':
+            return this.#coreRepository.createTask(operation.input);
+          case 'updateTask':
+            return this.#coreRepository.updateTask({
+              ...operation.input,
+              patch: {
+                ...(operation.input.patch.title === undefined
+                  ? {}
+                  : { title: operation.input.patch.title }),
+                ...(operation.input.patch.bodyMarkdown === undefined
+                  ? {}
+                  : { bodyMarkdown: operation.input.patch.bodyMarkdown }),
+                ...(operation.input.patch.priority === undefined
+                  ? {}
+                  : { priority: operation.input.patch.priority }),
+                ...(operation.input.patch.dueDate === undefined
+                  ? {}
+                  : { dueDate: operation.input.patch.dueDate }),
+                ...(operation.input.patch.blockedReason === undefined
+                  ? {}
+                  : { blockedReason: operation.input.patch.blockedReason }),
+              },
+            });
+          case 'changeTaskStatus':
+            return this.#coreRepository.changeTaskStatus(operation.input);
+          case 'moveTask':
+            return this.#coreRepository.moveTask({
+              taskId: operation.input.taskId,
+              moveHistoryId: operation.input.moveHistoryId,
+              statusHistoryId: operation.input.statusHistoryId,
+              eventId: operation.input.eventId,
+              receiptId: operation.input.receiptId,
+              expectedRevision: operation.input.expectedRevision,
+              projectId: operation.input.projectId,
+              ...(operation.input.status === undefined
+                ? {}
+                : { status: operation.input.status }),
+              ...(operation.input.sortOrder === undefined
+                ? {}
+                : { sortOrder: operation.input.sortOrder }),
+              context: operation.input.context,
+            });
+          case 'setTaskDeleted':
+            return this.#coreRepository.setTaskDeleted(operation.input);
+        }
+        throw new Error('UNSUPPORTED_CORE_REPOSITORY_METHOD');
+      }
       case 'setup.read':
         return readSetupState(this.#db);
       case 'setup.save_step':

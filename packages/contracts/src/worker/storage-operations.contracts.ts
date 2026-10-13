@@ -34,6 +34,12 @@ const MutationContextSchema = z.strictObject({
   now: UtcMsSchema,
   expiresAt: UtcMsSchema,
 });
+const RepositoryContextSchema = MutationContextSchema;
+const RepositoryIdentitySchema = z.strictObject({
+  id: z.string().uuid(),
+  eventId: z.string().uuid(),
+  receiptId: z.string().uuid(),
+});
 
 function request<Operation extends string, Payload extends z.ZodType>(
   op: Operation,
@@ -63,6 +69,142 @@ export const WorkspaceBootstrapDbRequestSchema = request(
 export const WorkspaceReadDbRequestSchema = request(
   'workspace.read',
   z.strictObject({}),
+);
+export const CoreRepositoryDbRequestSchema = request(
+  'core.repository',
+  z.discriminatedUnion('method', [
+    z.strictObject({
+      method: z.literal('getWorkspace'),
+      input: z.strictObject({}),
+    }),
+    z.strictObject({
+      method: z.literal('getProject'),
+      input: z.strictObject({ projectId: ProjectIdSchema }),
+    }),
+    z.strictObject({
+      method: z.literal('getTask'),
+      input: z.strictObject({ taskId: TaskIdSchema }),
+    }),
+    z.strictObject({
+      method: z.literal('createProject'),
+      input: RepositoryIdentitySchema.extend({
+        workspaceId: WorkspaceIdSchema,
+        name: z.string().min(1).max(120),
+        description: z.string().max(2_000),
+        slug: z.string().min(1).max(160),
+        priority: PrioritySchema,
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('updateProject'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema,
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        patch: z.strictObject({
+          name: z.string().min(1).max(120).optional(),
+          description: z.string().max(2_000).optional(),
+          priority: PrioritySchema.optional(),
+        }),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('changeProjectStatus'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema,
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        status: z.enum(['active', 'paused', 'completed', 'archived']),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('setProjectDeleted'),
+      input: z.strictObject({
+        projectId: ProjectIdSchema,
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        deleted: z.boolean(),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('createTask'),
+      input: RepositoryIdentitySchema.extend({
+        historyId: z.string().uuid(),
+        projectId: ProjectIdSchema,
+        title: TaskTitleSchema,
+        bodyMarkdown: MarkdownSchema,
+        priority: PrioritySchema,
+        dueDate: LocalDateSchema.nullable(),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('updateTask'),
+      input: z.strictObject({
+        taskId: TaskIdSchema,
+        historyId: z.string().uuid(),
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        patch: z.strictObject({
+          title: TaskTitleSchema.optional(),
+          bodyMarkdown: MarkdownSchema.optional(),
+          priority: PrioritySchema.optional(),
+          dueDate: LocalDateSchema.nullable().optional(),
+          blockedReason: z.string().max(2_000).nullable().optional(),
+        }),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('changeTaskStatus'),
+      input: z.strictObject({
+        taskId: TaskIdSchema,
+        historyId: z.string().uuid(),
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        status: z.enum(['todo', 'in_progress', 'blocked', 'done', 'cancelled']),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('moveTask'),
+      input: z.strictObject({
+        taskId: TaskIdSchema,
+        moveHistoryId: z.string().uuid(),
+        statusHistoryId: z.string().uuid(),
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        projectId: ProjectIdSchema,
+        status: z
+          .enum(['todo', 'in_progress', 'blocked', 'done', 'cancelled'])
+          .optional(),
+        sortOrder: z.number().int().nonnegative().optional(),
+        context: RepositoryContextSchema,
+      }),
+    }),
+    z.strictObject({
+      method: z.literal('setTaskDeleted'),
+      input: z.strictObject({
+        taskId: TaskIdSchema,
+        historyId: z.string().uuid(),
+        eventId: z.string().uuid(),
+        receiptId: z.string().uuid(),
+        expectedRevision: PositiveRevisionSchema,
+        deleted: z.boolean(),
+        context: RepositoryContextSchema,
+      }),
+    }),
+  ]),
 );
 export const SetupReadDbRequestSchema = request(
   'setup.read',
@@ -144,6 +286,7 @@ export const MaintenanceQuickCheckDbRequestSchema = request(
 export const StorageDbWorkerRequestSchema = z.discriminatedUnion('op', [
   WorkspaceBootstrapDbRequestSchema,
   WorkspaceReadDbRequestSchema,
+  CoreRepositoryDbRequestSchema,
   SetupReadDbRequestSchema,
   SetupSaveStepDbRequestSchema,
   SetupCompleteDbRequestSchema,

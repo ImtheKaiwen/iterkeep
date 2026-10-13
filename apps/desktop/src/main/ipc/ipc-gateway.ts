@@ -16,6 +16,11 @@ interface Route {
   readonly rateLimit: number;
 }
 
+export interface GatewayRequestMeta {
+  readonly requestId: string;
+  readonly idempotencyKey?: string;
+}
+
 const knownCodes = new Set<string>(FAILURE_CODES);
 const requestIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -72,7 +77,7 @@ export function registerValidatedIpc(
   route: Route,
   getWindow: () => BrowserWindow | null,
   limiter: IpcRateLimiter,
-  listener: (payload: unknown) => Promise<unknown>,
+  listener: (payload: unknown, meta: GatewayRequestMeta) => Promise<unknown>,
 ): void {
   ipcMain.handle(route.channel, async (event, raw: unknown) => {
     const fallbackRequestId = requestIdFrom(raw);
@@ -89,11 +94,17 @@ export function registerValidatedIpc(
       );
       const request = route.request.parse(raw) as {
         requestId: string;
+        idempotencyKey?: string;
         payload: unknown;
       };
       const result = {
         ok: true as const,
-        data: await listener(request.payload),
+        data: await listener(request.payload, {
+          requestId: request.requestId,
+          ...(request.idempotencyKey
+            ? { idempotencyKey: request.idempotencyKey }
+            : {}),
+        }),
         meta: {
           requestId: request.requestId,
           serverTime: new Date().toISOString(),
