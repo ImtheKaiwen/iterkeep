@@ -389,15 +389,78 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       this.decisions.set(input.id, {
         id: input.id,
         projectId: input.projectId,
+        title: input.title,
+        contextMarkdown: input.contextMarkdown,
         status: 'proposed',
         revision: 1,
         decisionMarkdown: input.decisionMarkdown,
         rationaleMarkdown: input.rationaleMarkdown,
+        consequencesMarkdown: input.consequencesMarkdown,
+        alternativesMarkdown: input.alternativesMarkdown,
+        decidedAt: null,
         supersedesDecisionId: null,
         supersededByDecisionId: null,
       });
       this.events.push(input.eventId);
       return { id: input.id, revision: 1, changed: true };
+    });
+  }
+
+  async reviseDecision(
+    input: Parameters<CoreRepositoryPort['reviseDecision']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('decisions.revise', input.context, () => {
+      const current = this.requireDecision(input.decisionId);
+      this.assertWritable(current.projectId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      if (current.status === 'superseded')
+        throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+      const targetStatus = input.patch.status ?? current.status;
+      if (
+        current.status === 'accepted' &&
+        (targetStatus !== 'accepted' ||
+          input.patch.contextMarkdown !== undefined ||
+          input.patch.decisionMarkdown !== undefined ||
+          input.patch.rationaleMarkdown !== undefined ||
+          input.patch.consequencesMarkdown !== undefined ||
+          input.patch.alternativesMarkdown !== undefined)
+      ) {
+        throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+      }
+      const next = {
+        ...current,
+        ...input.patch,
+        status: targetStatus,
+        decidedAt:
+          targetStatus === 'accepted'
+            ? (current.decidedAt ?? input.context.now)
+            : null,
+      };
+      if (
+        next.status === 'accepted' &&
+        (!next.decisionMarkdown.trim() || !next.rationaleMarkdown.trim())
+      ) {
+        throw new ApplicationError('VALIDATION_FAILED');
+      }
+      const changed = (
+        [
+          'title',
+          'contextMarkdown',
+          'decisionMarkdown',
+          'rationaleMarkdown',
+          'consequencesMarkdown',
+          'alternativesMarkdown',
+          'status',
+        ] as const
+      ).some((key) => next[key] !== current[key]);
+      const updated = {
+        ...next,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.decisions.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
     });
   }
 
@@ -416,6 +479,7 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       const updated = {
         ...decision,
         status: 'accepted' as const,
+        decidedAt: input.context.now,
         revision: decision.revision + 1,
       };
       this.decisions.set(decision.id, updated);

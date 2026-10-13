@@ -106,6 +106,18 @@ function normalizedDate(value: string | null): string | null {
   return value;
 }
 
+function optionalMarkdown<Key extends string>(
+  key: Key,
+  value: string | undefined,
+): Partial<Record<Key, string>> {
+  return value === undefined
+    ? {}
+    : ({ [key]: normalizedMarkdown(value, 2 * 1024 * 1024) } as Record<
+        Key,
+        string
+      >);
+}
+
 function assertWritableProject(
   project: Awaited<ReturnType<CoreRepositoryPort['getProject']>>,
 ): asserts project is NonNullable<typeof project> {
@@ -508,6 +520,86 @@ export class ApplicationCore {
       receiptId: this.ports.ids.next(),
       ...payload,
       context: this.context('decisions.create', payload, commandContext),
+    });
+  }
+
+  async reviseDecision(
+    input: {
+      decisionId: string;
+      expectedRevision: number;
+      patch: {
+        title?: string;
+        contextMarkdown?: string;
+        decisionMarkdown?: string;
+        rationaleMarkdown?: string;
+        consequencesMarkdown?: string;
+        alternativesMarkdown?: string;
+        status?: 'proposed' | 'accepted' | 'rejected';
+      };
+      reason: string;
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    const current = await this.ports.repository.getDecision(input.decisionId);
+    if (!current) throw new ApplicationError('NOT_FOUND');
+    if (current.status === 'superseded') {
+      throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+    }
+    const patch = {
+      ...(input.patch.title === undefined
+        ? {}
+        : { title: normalizedRequired(input.patch.title, 200) }),
+      ...optionalMarkdown('contextMarkdown', input.patch.contextMarkdown),
+      ...optionalMarkdown('decisionMarkdown', input.patch.decisionMarkdown),
+      ...optionalMarkdown('rationaleMarkdown', input.patch.rationaleMarkdown),
+      ...optionalMarkdown(
+        'consequencesMarkdown',
+        input.patch.consequencesMarkdown,
+      ),
+      ...optionalMarkdown(
+        'alternativesMarkdown',
+        input.patch.alternativesMarkdown,
+      ),
+      ...(input.patch.status === undefined
+        ? {}
+        : { status: input.patch.status }),
+    };
+    if (Object.keys(patch).length === 0)
+      throw new ApplicationError('VALIDATION_FAILED');
+    const targetStatus = patch.status ?? current.status;
+    if (
+      current.status === 'accepted' &&
+      (targetStatus !== 'accepted' ||
+        patch.contextMarkdown !== undefined ||
+        patch.decisionMarkdown !== undefined ||
+        patch.rationaleMarkdown !== undefined ||
+        patch.consequencesMarkdown !== undefined ||
+        patch.alternativesMarkdown !== undefined)
+    ) {
+      throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+    }
+    const decisionMarkdown = patch.decisionMarkdown ?? current.decisionMarkdown;
+    const rationaleMarkdown =
+      patch.rationaleMarkdown ?? current.rationaleMarkdown;
+    if (
+      targetStatus === 'accepted' &&
+      (!decisionMarkdown.trim() || !rationaleMarkdown.trim())
+    ) {
+      throw new ApplicationError('VALIDATION_FAILED');
+    }
+    const reason = normalizedRequired(input.reason, 500);
+    const payload = {
+      decisionId: input.decisionId,
+      expectedRevision: input.expectedRevision,
+      patch,
+      reason,
+    };
+    return this.ports.repository.reviseDecision({
+      ...payload,
+      revisionId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('decisions.revise', payload, commandContext),
     });
   }
 

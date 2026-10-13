@@ -851,8 +851,8 @@ export type DomainEventType =
   | 'project.created' | 'project.updated' | 'project.archived'
   | 'task.created' | 'task.updated' | 'task.completed' | 'task.reopened'
   | 'task.moved' | 'task.deleted' | 'task.restored'
-  | 'document.created' | 'document.updated'
-  | 'decision.created' | 'decision.accepted' | 'decision.superseded'
+  | 'document.created' | 'document.updated' | 'document.trashed' | 'document.restored'
+  | 'decision.created' | 'decision.revised' | 'decision.accepted' | 'decision.superseded'
   | 'activity_log.appended' | 'record_link.created';
 
 export interface DomainEvent<TPayload extends object = Readonly<Record<string, unknown>>> {

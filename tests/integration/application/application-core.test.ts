@@ -207,6 +207,19 @@ for (const [name, createHarness] of [
               >('SELECT count(*) AS count FROM document_versions')
               .get()?.count,
           ).toBe(4);
+          expect(
+            harness.sqlite.db
+              .prepare<[string], { type: string }>(
+                'SELECT type FROM domain_events WHERE aggregate_id=? ORDER BY sequence',
+              )
+              .all(document.id)
+              .map((row) => row.type),
+          ).toEqual([
+            'document.created',
+            'document.updated',
+            'document.trashed',
+            'document.restored',
+          ]);
         }
       } finally {
         await harness.close();
@@ -273,6 +286,104 @@ for (const [name, createHarness] of [
           status: 'accepted',
           supersedesDecisionId: oldDecision.id,
         });
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('revises decisions with immutable snapshots and protected accepted content', async () => {
+      const harness = await createHarness();
+      try {
+        const decision = await harness.core.createDecision(
+          {
+            projectId: INBOX_ID,
+            title: 'Revision candidate',
+            decisionMarkdown: 'Use option A',
+            rationaleMarkdown: 'It is deterministic',
+          },
+          context('00000000-0000-4000-8000-000000000135'),
+        );
+        expect(
+          await harness.core.reviseDecision(
+            {
+              decisionId: decision.id,
+              expectedRevision: 1,
+              patch: { status: 'rejected' },
+              reason: 'Needs reconsideration',
+            },
+            context('00000000-0000-4000-8000-000000000136'),
+          ),
+        ).toMatchObject({ revision: 2, changed: true });
+        await harness.core.reviseDecision(
+          {
+            decisionId: decision.id,
+            expectedRevision: 2,
+            patch: { status: 'proposed' },
+            reason: 'Reopened for review',
+          },
+          context('00000000-0000-4000-8000-000000000137'),
+        );
+        await harness.core.reviseDecision(
+          {
+            decisionId: decision.id,
+            expectedRevision: 3,
+            patch: { status: 'accepted' },
+            reason: 'Approved after review',
+          },
+          context('00000000-0000-4000-8000-000000000138'),
+        );
+        expect(
+          await harness.core.reviseDecision(
+            {
+              decisionId: decision.id,
+              expectedRevision: 4,
+              patch: { title: 'Corrected revision candidate' },
+              reason: 'Correct title spelling',
+            },
+            context('00000000-0000-4000-8000-000000000139'),
+          ),
+        ).toMatchObject({ revision: 5, changed: true });
+        expect(await harness.core.getDecision(decision.id)).toMatchObject({
+          title: 'Corrected revision candidate',
+          status: 'accepted',
+          decidedAt: NOW,
+          revision: 5,
+        });
+        await expect(
+          harness.core.reviseDecision(
+            {
+              decisionId: decision.id,
+              expectedRevision: 5,
+              patch: { decisionMarkdown: 'Change the actual choice' },
+              reason: 'Forbidden semantic rewrite',
+            },
+            context('00000000-0000-4000-8000-000000000140'),
+          ),
+        ).rejects.toMatchObject({ code: 'DECISION_HISTORY_PROTECTED' });
+        if (harness.sqlite) {
+          expect(
+            harness.sqlite.db
+              .prepare<
+                [string],
+                { count: number }
+              >('SELECT count(*) AS count FROM decision_revisions WHERE decision_id=?')
+              .get(decision.id)?.count,
+          ).toBe(5);
+          expect(
+            harness.sqlite.db
+              .prepare<[string], { type: string }>(
+                'SELECT type FROM domain_events WHERE aggregate_id=? ORDER BY sequence',
+              )
+              .all(decision.id)
+              .map((row) => row.type),
+          ).toEqual([
+            'decision.created',
+            'decision.revised',
+            'decision.revised',
+            'decision.accepted',
+            'decision.revised',
+          ]);
+        }
       } finally {
         await harness.close();
       }

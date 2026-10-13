@@ -130,10 +130,15 @@ function decisionSnapshot(row: DecisionRow): DecisionSnapshot {
   return {
     id: row.id,
     projectId: row.project_id,
+    title: row.title,
+    contextMarkdown: row.context_markdown,
     status: row.status,
     revision: row.revision,
     decisionMarkdown: row.decision_markdown,
     rationaleMarkdown: row.rationale_markdown,
+    consequencesMarkdown: row.consequences_markdown,
+    alternativesMarkdown: row.alternatives_markdown,
+    decidedAt: row.decided_at,
     supersedesDecisionId: row.supersedes_decision_id,
     supersededByDecisionId: row.superseded_by_decision_id,
   };
@@ -1052,7 +1057,7 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
         );
         appendEvent(this.db, {
           id: input.eventId,
-          type: 'document.updated',
+          type: input.deleted ? 'document.trashed' : 'document.restored',
           aggregateId: input.documentId,
           aggregateRevision: revision,
           ...actorEvent(input.context),
@@ -1123,6 +1128,113 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
         payload: { decisionId: input.id, projectId: input.projectId },
       });
       const result = { id: input.id, revision: 1, changed: true };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async reviseDecision(
+    input: Parameters<CoreRepositoryPort['reviseDecision']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'decisions.revise';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.requireDecisionRow(input.decisionId);
+      assertProjectWritable(this.db, current.project_id);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      if (current.status === 'superseded')
+        throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+      const targetStatus = input.patch.status ?? current.status;
+      if (
+        current.status === 'accepted' &&
+        (targetStatus !== 'accepted' ||
+          input.patch.contextMarkdown !== undefined ||
+          input.patch.decisionMarkdown !== undefined ||
+          input.patch.rationaleMarkdown !== undefined ||
+          input.patch.consequencesMarkdown !== undefined ||
+          input.patch.alternativesMarkdown !== undefined)
+      ) {
+        throw new ApplicationError('DECISION_HISTORY_PROTECTED');
+      }
+      const next = {
+        title: input.patch.title ?? current.title,
+        context: input.patch.contextMarkdown ?? current.context_markdown,
+        decision: input.patch.decisionMarkdown ?? current.decision_markdown,
+        rationale: input.patch.rationaleMarkdown ?? current.rationale_markdown,
+        consequences:
+          input.patch.consequencesMarkdown ?? current.consequences_markdown,
+        alternatives:
+          input.patch.alternativesMarkdown ?? current.alternatives_markdown,
+        status: targetStatus,
+        decidedAt:
+          targetStatus === 'accepted'
+            ? (current.decided_at ?? input.context.now)
+            : null,
+      };
+      if (
+        next.status === 'accepted' &&
+        (!next.decision.trim() || !next.rationale.trim())
+      ) {
+        throw new ApplicationError('VALIDATION_FAILED');
+      }
+      const changed =
+        next.title !== current.title ||
+        next.context !== current.context_markdown ||
+        next.decision !== current.decision_markdown ||
+        next.rationale !== current.rationale_markdown ||
+        next.consequences !== current.consequences_markdown ||
+        next.alternatives !== current.alternatives_markdown ||
+        next.status !== current.status;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            `UPDATE decisions SET title=?,context_markdown=?,decision_markdown=?,rationale_markdown=?,
+             consequences_markdown=?,alternatives_markdown=?,status=?,decided_at=?,updated_at=?,revision=revision+1
+             WHERE id=? AND revision=? AND deleted_at IS NULL`,
+          )
+          .run(
+            next.title,
+            next.context,
+            next.decision,
+            next.rationale,
+            next.consequences,
+            next.alternatives,
+            next.status,
+            next.decidedAt,
+            input.context.now,
+            input.decisionId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        const updated = this.requireDecisionRow(input.decisionId);
+        this.insertDecisionRevision(
+          updated,
+          input.revisionId,
+          revision,
+          input.reason,
+          input.context,
+        );
+        appendEvent(this.db, {
+          id: input.eventId,
+          type:
+            current.status !== 'accepted' && next.status === 'accepted'
+              ? 'decision.accepted'
+              : 'decision.revised',
+          aggregateId: input.decisionId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { decisionId: input.decisionId, status: next.status },
+        });
+      }
+      const result = { id: input.decisionId, revision, changed };
       saveReceipt(this.db, command, input.receiptId, input.context, result);
       return result;
     });

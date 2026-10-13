@@ -49,10 +49,15 @@ export interface ProjectSnapshot {
 export interface DecisionSnapshot {
   readonly id: string;
   readonly projectId: string;
+  readonly title: string;
+  readonly contextMarkdown: string;
   readonly status: DecisionStatus;
   readonly revision: number;
   readonly decisionMarkdown: string;
   readonly rationaleMarkdown: string;
+  readonly consequencesMarkdown: string;
+  readonly alternativesMarkdown: string;
+  readonly decidedAt: string | null;
   readonly supersedesDecisionId: string | null;
   readonly supersededByDecisionId: string | null;
 }
@@ -243,6 +248,25 @@ export interface CoreRepositoryPort {
     rationaleMarkdown: string;
     consequencesMarkdown: string;
     alternativesMarkdown: string;
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  reviseDecision(input: {
+    decisionId: string;
+    revisionId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    patch: {
+      title?: string;
+      contextMarkdown?: string;
+      decisionMarkdown?: string;
+      rationaleMarkdown?: string;
+      consequencesMarkdown?: string;
+      alternativesMarkdown?: string;
+      status?: Exclude<DecisionStatus, 'superseded'>;
+    };
+    reason: string;
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
