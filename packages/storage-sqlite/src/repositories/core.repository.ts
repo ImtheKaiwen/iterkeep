@@ -90,6 +90,25 @@ interface DocumentRow {
   readonly deleted_at: string | null;
 }
 
+interface TaskRow {
+  readonly id: string;
+  readonly project_id: string;
+  readonly title: string;
+  readonly body_markdown: string;
+  readonly status: NonNullable<
+    Awaited<ReturnType<CoreRepositoryPort['getTask']>>
+  >['status'];
+  readonly priority: NonNullable<
+    Awaited<ReturnType<CoreRepositoryPort['getTask']>>
+  >['priority'];
+  readonly due_date: string | null;
+  readonly completed_at: string | null;
+  readonly sort_order: number;
+  readonly blocked_reason: string | null;
+  readonly revision: number;
+  readonly deleted_at: string | null;
+}
+
 interface DecisionRow {
   readonly id: string;
   readonly project_id: string;
@@ -161,12 +180,14 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           workspace_id: string;
           kind: 'user' | 'inbox';
           name: string;
+          description: string;
           status: ProjectSnapshot['status'];
+          priority: ProjectSnapshot['priority'];
           revision: number;
           deleted_at: string | null;
         }
       >(
-        `SELECT id,workspace_id,kind,name,status,revision,deleted_at
+        `SELECT id,workspace_id,kind,name,description,status,priority,revision,deleted_at
          FROM projects WHERE id=?`,
       )
       .get(projectId);
@@ -176,7 +197,9 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           workspaceId: row.workspace_id,
           kind: row.kind,
           name: row.name,
+          description: row.description,
           status: row.status,
+          priority: row.priority,
           revision: row.revision,
           deletedAt: row.deleted_at,
         }
@@ -191,12 +214,24 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           id: string;
           project_id: string;
           title: string;
-          status: string;
+          body_markdown: string;
+          status: NonNullable<
+            Awaited<ReturnType<CoreRepositoryPort['getTask']>>
+          >['status'];
+          priority: NonNullable<
+            Awaited<ReturnType<CoreRepositoryPort['getTask']>>
+          >['priority'];
+          due_date: string | null;
+          completed_at: string | null;
+          sort_order: number;
+          blocked_reason: string | null;
           revision: number;
           deleted_at: string | null;
         }
       >(
-        'SELECT id,project_id,title,status,revision,deleted_at FROM tasks WHERE id=?',
+        `SELECT id,project_id,title,body_markdown,status,priority,due_date,
+                completed_at,sort_order,blocked_reason,revision,deleted_at
+         FROM tasks WHERE id=?`,
       )
       .get(taskId);
     return Promise.resolve(
@@ -205,7 +240,13 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
             id: row.id,
             projectId: row.project_id,
             title: row.title,
+            bodyMarkdown: row.body_markdown,
             status: row.status,
+            priority: row.priority,
+            dueDate: row.due_date,
+            completedAt: row.completed_at,
+            sortOrder: row.sort_order,
+            blockedReason: row.blocked_reason,
             revision: row.revision,
             deletedAt: row.deleted_at,
           }
@@ -331,6 +372,159 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
     });
   }
 
+  async updateProject(
+    input: Parameters<CoreRepositoryPort['updateProject']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'projects.update';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.db
+        .prepare<
+          [string],
+          {
+            kind: string;
+            name: string;
+            description: string;
+            priority: ProjectSnapshot['priority'];
+            status: ProjectSnapshot['status'];
+            revision: number;
+            deleted_at: string | null;
+          }
+        >(
+          'SELECT kind,name,description,priority,status,revision,deleted_at FROM projects WHERE id=?',
+        )
+        .get(input.projectId);
+      if (!current || current.deleted_at !== null)
+        throw new ApplicationError('NOT_FOUND');
+      if (current.kind === 'inbox')
+        throw new ApplicationError('INBOX_PROTECTED');
+      if (current.status === 'archived')
+        throw new ApplicationError('INVALID_STATUS_TRANSITION');
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const name = input.patch.name ?? current.name;
+      const description = input.patch.description ?? current.description;
+      const priority = input.patch.priority ?? current.priority;
+      const changed =
+        name !== current.name ||
+        description !== current.description ||
+        priority !== current.priority;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            `UPDATE projects SET name=?,description=?,priority=?,updated_at=?,revision=revision+1
+             WHERE id=? AND revision=? AND deleted_at IS NULL`,
+          )
+          .run(
+            name,
+            description,
+            priority,
+            input.context.now,
+            input.projectId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        appendEvent(this.db, {
+          id: input.eventId,
+          type: 'project.updated',
+          aggregateId: input.projectId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { projectId: input.projectId },
+        });
+      }
+      const result = { id: input.projectId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async changeProjectStatus(
+    input: Parameters<CoreRepositoryPort['changeProjectStatus']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'projects.status';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.db
+        .prepare<
+          [string],
+          {
+            kind: 'user' | 'inbox';
+            status: ProjectSnapshot['status'];
+            revision: number;
+            deleted_at: string | null;
+          }
+        >('SELECT kind,status,revision,deleted_at FROM projects WHERE id=?')
+        .get(input.projectId);
+      if (!current || current.deleted_at !== null)
+        throw new ApplicationError('NOT_FOUND');
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const allowed: Record<
+        ProjectSnapshot['status'],
+        readonly ProjectSnapshot['status'][]
+      > = {
+        active: ['paused', 'completed', 'archived'],
+        paused: ['active', 'completed', 'archived'],
+        completed: ['active', 'archived'],
+        archived: ['active'],
+      };
+      const changed = current.status !== input.status;
+      if (
+        changed &&
+        (current.kind === 'inbox' ||
+          !allowed[current.status].includes(input.status))
+      ) {
+        throw new ApplicationError(
+          current.kind === 'inbox'
+            ? 'INBOX_PROTECTED'
+            : 'INVALID_STATUS_TRANSITION',
+        );
+      }
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            'UPDATE projects SET status=?,updated_at=?,revision=revision+1 WHERE id=? AND revision=? AND deleted_at IS NULL',
+          )
+          .run(
+            input.status,
+            input.context.now,
+            input.projectId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        appendEvent(this.db, {
+          id: input.eventId,
+          type:
+            input.status === 'archived'
+              ? 'project.archived'
+              : 'project.updated',
+          aggregateId: input.projectId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { projectId: input.projectId, status: input.status },
+        });
+      }
+      const result = { id: input.projectId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
   async createTask(
     input: Parameters<CoreRepositoryPort['createTask']>[0],
   ): Promise<RevisionReceipt> {
@@ -383,6 +577,313 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
         payload: { projectId: input.projectId, taskId: input.id },
       });
       const result = { id: input.id, revision: 1, changed: true };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async updateTask(
+    input: Parameters<CoreRepositoryPort['updateTask']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'tasks.update';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.requireTaskRow(input.taskId);
+      if (current.deleted_at !== null) throw new ApplicationError('NOT_FOUND');
+      assertProjectWritable(this.db, current.project_id);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const next = {
+        title: input.patch.title ?? current.title,
+        body: input.patch.bodyMarkdown ?? current.body_markdown,
+        priority: input.patch.priority ?? current.priority,
+        dueDate:
+          input.patch.dueDate === undefined
+            ? current.due_date
+            : input.patch.dueDate,
+        blockedReason:
+          input.patch.blockedReason === undefined
+            ? current.blocked_reason
+            : input.patch.blockedReason,
+      };
+      const changed =
+        next.title !== current.title ||
+        next.body !== current.body_markdown ||
+        next.priority !== current.priority ||
+        next.dueDate !== current.due_date ||
+        next.blockedReason !== current.blocked_reason;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            `UPDATE tasks SET title=?,body_markdown=?,priority=?,due_date=?,blocked_reason=?,updated_at=?,revision=revision+1
+           WHERE id=? AND revision=? AND deleted_at IS NULL`,
+          )
+          .run(
+            next.title,
+            next.body,
+            next.priority,
+            next.dueDate,
+            next.blockedReason,
+            input.context.now,
+            input.taskId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        if (next.priority !== current.priority) {
+          this.insertTaskHistory(
+            input.historyId,
+            input.taskId,
+            'priority_changed',
+            current.priority,
+            next.priority,
+            input.context,
+          );
+        }
+        appendEvent(this.db, {
+          id: input.eventId,
+          type: 'task.updated',
+          aggregateId: input.taskId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { taskId: input.taskId },
+        });
+      }
+      const result = { id: input.taskId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async changeTaskStatus(
+    input: Parameters<CoreRepositoryPort['changeTaskStatus']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'tasks.status';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.requireTaskRow(input.taskId);
+      if (current.deleted_at !== null) throw new ApplicationError('NOT_FOUND');
+      assertProjectWritable(this.db, current.project_id);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const changed = current.status !== input.status;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const completedAt = input.status === 'done' ? input.context.now : null;
+        const update = this.db
+          .prepare(
+            `UPDATE tasks SET status=?,completed_at=?,blocked_reason=CASE WHEN ?='blocked' THEN blocked_reason ELSE NULL END,
+             updated_at=?,revision=revision+1 WHERE id=? AND revision=? AND deleted_at IS NULL`,
+          )
+          .run(
+            input.status,
+            completedAt,
+            input.status,
+            input.context.now,
+            input.taskId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        const historyKind =
+          input.status === 'done'
+            ? 'completed'
+            : current.status === 'done'
+              ? 'reopened'
+              : 'status_changed';
+        this.insertTaskHistory(
+          input.historyId,
+          input.taskId,
+          historyKind,
+          current.status,
+          input.status,
+          input.context,
+        );
+        appendEvent(this.db, {
+          id: input.eventId,
+          type:
+            input.status === 'done'
+              ? 'task.completed'
+              : current.status === 'done'
+                ? 'task.reopened'
+                : 'task.updated',
+          aggregateId: input.taskId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { taskId: input.taskId, status: input.status },
+        });
+      }
+      const result = { id: input.taskId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async moveTask(
+    input: Parameters<CoreRepositoryPort['moveTask']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = 'tasks.move';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.requireTaskRow(input.taskId);
+      if (current.deleted_at !== null) throw new ApplicationError('NOT_FOUND');
+      assertProjectWritable(this.db, current.project_id);
+      assertProjectWritable(this.db, input.projectId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const status = input.status ?? current.status;
+      const sortOrder = input.sortOrder ?? current.sort_order;
+      const changed =
+        current.project_id !== input.projectId ||
+        current.status !== status ||
+        current.sort_order !== sortOrder;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const completedAt =
+          status === current.status
+            ? current.completed_at
+            : status === 'done'
+              ? input.context.now
+              : null;
+        const update = this.db
+          .prepare(
+            `UPDATE tasks SET project_id=?,status=?,sort_order=?,completed_at=?,blocked_reason=CASE WHEN ?='blocked' THEN blocked_reason ELSE NULL END,
+             updated_at=?,revision=revision+1 WHERE id=? AND revision=? AND deleted_at IS NULL`,
+          )
+          .run(
+            input.projectId,
+            status,
+            sortOrder,
+            completedAt,
+            status,
+            input.context.now,
+            input.taskId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        if (current.project_id !== input.projectId) {
+          this.insertTaskHistory(
+            input.moveHistoryId,
+            input.taskId,
+            'moved_project',
+            current.project_id,
+            input.projectId,
+            input.context,
+          );
+        }
+        if (current.status !== status) {
+          this.insertTaskHistory(
+            input.statusHistoryId,
+            input.taskId,
+            status === 'done'
+              ? 'completed'
+              : current.status === 'done'
+                ? 'reopened'
+                : 'status_changed',
+            current.status,
+            status,
+            input.context,
+          );
+        }
+        appendEvent(this.db, {
+          id: input.eventId,
+          type:
+            current.project_id !== input.projectId
+              ? 'task.moved'
+              : status === 'done'
+                ? 'task.completed'
+                : current.status === 'done'
+                  ? 'task.reopened'
+                  : 'task.updated',
+          aggregateId: input.taskId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { taskId: input.taskId, projectId: input.projectId, status },
+        });
+      }
+      const result = { id: input.taskId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async setTaskDeleted(
+    input: Parameters<CoreRepositoryPort['setTaskDeleted']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = input.deleted ? 'tasks.trash' : 'tasks.restore';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.requireTaskRow(input.taskId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      if (input.deleted) assertProjectWritable(this.db, current.project_id);
+      else {
+        const parent = this.db
+          .prepare<
+            [string],
+            { deleted_at: string | null }
+          >('SELECT deleted_at FROM projects WHERE id=?')
+          .get(current.project_id);
+        if (!parent || parent.deleted_at !== null)
+          throw new ApplicationError('REFERENTIAL_INTEGRITY');
+      }
+      const changed = input.deleted
+        ? current.deleted_at === null
+        : current.deleted_at !== null;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            'UPDATE tasks SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=? AND revision=?',
+          )
+          .run(
+            input.deleted ? input.context.now : null,
+            input.context.now,
+            input.taskId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        this.insertTaskHistory(
+          input.historyId,
+          input.taskId,
+          input.deleted ? 'deleted' : 'restored',
+          null,
+          null,
+          input.context,
+        );
+        appendEvent(this.db, {
+          id: input.eventId,
+          type: input.deleted ? 'task.deleted' : 'task.restored',
+          aggregateId: input.taskId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { taskId: input.taskId },
+        });
+      }
+      const result = { id: input.taskId, revision, changed };
       saveReceipt(this.db, command, input.receiptId, input.context, result);
       return result;
     });
@@ -495,6 +996,67 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
           aggregateRevision: revision,
           ...actorEvent(input.context),
           payload: { documentId: input.documentId },
+        });
+      }
+      const result = { id: input.documentId, revision, changed };
+      saveReceipt(this.db, command, input.receiptId, input.context, result);
+      return result;
+    });
+  }
+
+  async setDocumentDeleted(
+    input: Parameters<CoreRepositoryPort['setDocumentDeleted']>[0],
+  ): Promise<RevisionReceipt> {
+    return inImmediateTransaction(this.db, () => {
+      const command = input.deleted ? 'documents.trash' : 'documents.restore';
+      const prior = lookupReceipt(
+        this.db,
+        identity(command, input.context),
+        receiptValue<RevisionReceipt>,
+      );
+      if (prior) return prior;
+      const current = this.db
+        .prepare<[string], DocumentRow>(
+          `SELECT id,project_id,title,body_markdown,pinned,revision,deleted_at
+           FROM documents WHERE id=?`,
+        )
+        .get(input.documentId);
+      if (!current) throw new ApplicationError('NOT_FOUND');
+      assertProjectWritable(this.db, current.project_id);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const changed = input.deleted
+        ? current.deleted_at === null
+        : current.deleted_at !== null;
+      const revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        const update = this.db
+          .prepare(
+            'UPDATE documents SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=? AND revision=?',
+          )
+          .run(
+            input.deleted ? input.context.now : null,
+            input.context.now,
+            input.documentId,
+            input.expectedRevision,
+          );
+        if (update.changes !== 1)
+          throw new ApplicationError('CONFLICT_REVISION');
+        this.insertDocumentVersion(
+          input.documentId,
+          input.versionId,
+          revision,
+          current.title,
+          current.body_markdown,
+          input.context,
+        );
+        appendEvent(this.db, {
+          id: input.eventId,
+          type: 'document.updated',
+          aggregateId: input.documentId,
+          aggregateRevision: revision,
+          ...actorEvent(input.context),
+          payload: { documentId: input.documentId, deleted: input.deleted },
         });
       }
       const result = { id: input.documentId, revision, changed };
@@ -985,6 +1547,52 @@ export class SqliteCoreRepository implements CoreRepositoryPort {
         return result;
       }),
     );
+  }
+
+  private requireTaskRow(taskId: string): TaskRow {
+    const row = this.db
+      .prepare<[string], TaskRow>(
+        `SELECT id,project_id,title,body_markdown,status,priority,due_date,
+                completed_at,sort_order,blocked_reason,revision,deleted_at
+         FROM tasks WHERE id=?`,
+      )
+      .get(taskId);
+    if (!row) throw new ApplicationError('NOT_FOUND');
+    return row;
+  }
+
+  private insertTaskHistory(
+    id: string,
+    taskId: string,
+    kind:
+      | 'status_changed'
+      | 'completed'
+      | 'reopened'
+      | 'moved_project'
+      | 'priority_changed'
+      | 'deleted'
+      | 'restored',
+    fromValue: string | null,
+    toValue: string | null,
+    context: PersistenceContext,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO task_history
+         (id,task_id,kind,from_value,to_value,occurred_at,actor_kind,actor_ref,correlation_id)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        id,
+        taskId,
+        kind,
+        fromValue,
+        toValue,
+        context.now,
+        context.actorKind,
+        context.actorRef,
+        context.correlationId,
+      );
   }
 
   private insertDocumentVersion(

@@ -44,7 +44,9 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
       workspaceId: workspace.id,
       kind: 'inbox',
       name: 'Inbox',
+      description: '',
       status: 'active',
+      priority: 'none',
       revision: 1,
       deletedAt: null,
     });
@@ -89,12 +91,83 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
         workspaceId: input.workspaceId,
         kind: 'user',
         name: input.name,
+        description: input.description,
         status: 'active',
+        priority: input.priority,
         revision: 1,
         deletedAt: null,
       });
       this.events.push(input.eventId);
       return { id: input.id, revision: 1, changed: true };
+    });
+  }
+
+  async updateProject(
+    input: Parameters<CoreRepositoryPort['updateProject']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('projects.update', input.context, () => {
+      const current = this.projects.get(input.projectId);
+      if (!current || current.deletedAt !== null)
+        throw new ApplicationError('NOT_FOUND');
+      if (current.kind === 'inbox')
+        throw new ApplicationError('INBOX_PROTECTED');
+      if (current.status === 'archived')
+        throw new ApplicationError('INVALID_STATUS_TRANSITION');
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const next = { ...current, ...input.patch };
+      const changed =
+        next.name !== current.name ||
+        next.description !== current.description ||
+        next.priority !== current.priority;
+      const updated = {
+        ...next,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.projects.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
+    });
+  }
+
+  async changeProjectStatus(
+    input: Parameters<CoreRepositoryPort['changeProjectStatus']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('projects.status', input.context, () => {
+      const current = this.projects.get(input.projectId);
+      if (!current || current.deletedAt !== null)
+        throw new ApplicationError('NOT_FOUND');
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const allowed: Record<
+        ProjectSnapshot['status'],
+        readonly ProjectSnapshot['status'][]
+      > = {
+        active: ['paused', 'completed', 'archived'],
+        paused: ['active', 'completed', 'archived'],
+        completed: ['active', 'archived'],
+        archived: ['active'],
+      };
+      const changed = current.status !== input.status;
+      if (
+        changed &&
+        (current.kind === 'inbox' ||
+          !allowed[current.status].includes(input.status))
+      ) {
+        throw new ApplicationError(
+          current.kind === 'inbox'
+            ? 'INBOX_PROTECTED'
+            : 'INVALID_STATUS_TRANSITION',
+        );
+      }
+      const updated = {
+        ...current,
+        status: input.status,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.projects.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
     });
   }
 
@@ -107,12 +180,134 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
         id: input.id,
         projectId: input.projectId,
         title: input.title,
+        bodyMarkdown: input.bodyMarkdown,
         status: 'todo',
+        priority: input.priority,
+        dueDate: input.dueDate,
+        completedAt: null,
+        sortOrder: 0,
+        blockedReason: null,
         revision: 1,
         deletedAt: null,
       });
       this.events.push(input.eventId);
       return { id: input.id, revision: 1, changed: true };
+    });
+  }
+
+  async updateTask(
+    input: Parameters<CoreRepositoryPort['updateTask']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('tasks.update', input.context, () => {
+      const current = this.requireTask(input.taskId);
+      if (current.deletedAt !== null) throw new ApplicationError('NOT_FOUND');
+      this.assertWritable(current.projectId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const next = { ...current, ...input.patch };
+      const changed = Object.keys(input.patch).some(
+        (key) =>
+          next[key as keyof TaskSnapshot] !==
+          current[key as keyof TaskSnapshot],
+      );
+      const updated = {
+        ...next,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.tasks.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
+    });
+  }
+
+  async changeTaskStatus(
+    input: Parameters<CoreRepositoryPort['changeTaskStatus']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('tasks.status', input.context, () => {
+      const current = this.requireTask(input.taskId);
+      if (current.deletedAt !== null) throw new ApplicationError('NOT_FOUND');
+      this.assertWritable(current.projectId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const changed = current.status !== input.status;
+      const updated = {
+        ...current,
+        status: input.status,
+        completedAt: changed
+          ? input.status === 'done'
+            ? input.context.now
+            : null
+          : current.completedAt,
+        blockedReason:
+          input.status === 'blocked' ? current.blockedReason : null,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.tasks.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
+    });
+  }
+
+  async moveTask(
+    input: Parameters<CoreRepositoryPort['moveTask']>[0],
+  ): Promise<RevisionReceipt> {
+    return this.once('tasks.move', input.context, () => {
+      const current = this.requireTask(input.taskId);
+      if (current.deletedAt !== null) throw new ApplicationError('NOT_FOUND');
+      this.assertWritable(current.projectId);
+      this.assertWritable(input.projectId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const status = input.status ?? current.status;
+      const sortOrder = input.sortOrder ?? current.sortOrder;
+      const changed =
+        current.projectId !== input.projectId ||
+        current.status !== status ||
+        current.sortOrder !== sortOrder;
+      const updated = {
+        ...current,
+        projectId: input.projectId,
+        status,
+        sortOrder,
+        completedAt:
+          status === current.status
+            ? current.completedAt
+            : status === 'done'
+              ? input.context.now
+              : null,
+        blockedReason: status === 'blocked' ? current.blockedReason : null,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.tasks.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
+    });
+  }
+
+  async setTaskDeleted(
+    input: Parameters<CoreRepositoryPort['setTaskDeleted']>[0],
+  ): Promise<RevisionReceipt> {
+    const command = input.deleted ? 'tasks.trash' : 'tasks.restore';
+    return this.once(command, input.context, () => {
+      const current = this.requireTask(input.taskId);
+      if (current.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const parent = this.projects.get(current.projectId);
+      if (!parent || parent.deletedAt !== null)
+        throw new ApplicationError('REFERENTIAL_INTEGRITY');
+      if (input.deleted && parent.status === 'archived')
+        throw new ApplicationError('INVALID_STATUS_TRANSITION');
+      const changed = input.deleted
+        ? current.deletedAt === null
+        : current.deletedAt !== null;
+      const updated = {
+        ...current,
+        deletedAt: input.deleted ? input.context.now : null,
+        revision: changed ? current.revision + 1 : current.revision,
+      };
+      this.tasks.set(current.id, updated);
+      if (changed) this.events.push(input.eventId);
+      return { id: current.id, revision: updated.revision, changed };
     });
   }
 
@@ -157,6 +352,32 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
         this.events.push(input.eventId);
       }
       return { id: document.id, revision: document.revision, changed };
+    });
+  }
+
+  async setDocumentDeleted(
+    input: Parameters<CoreRepositoryPort['setDocumentDeleted']>[0],
+  ): Promise<RevisionReceipt> {
+    const command = input.deleted ? 'documents.trash' : 'documents.restore';
+    return this.once(command, input.context, () => {
+      const document = this.documents.get(input.documentId);
+      if (!document) throw new ApplicationError('NOT_FOUND');
+      this.assertWritable(document.projectId);
+      if (document.revision !== input.expectedRevision)
+        throw new ApplicationError('CONFLICT_REVISION');
+      const changed = input.deleted
+        ? document.deletedAt === null
+        : document.deletedAt !== null;
+      if (changed) {
+        document.deletedAt = input.deleted ? input.context.now : null;
+        document.revision += 1;
+        this.events.push(input.eventId);
+      }
+      return {
+        id: document.id,
+        revision: document.revision,
+        changed,
+      };
     });
   }
 
@@ -369,6 +590,12 @@ export class InMemoryCoreRepository implements CoreRepositoryPort {
     const decision = this.decisions.get(decisionId);
     if (!decision) throw new ApplicationError('NOT_FOUND');
     return decision;
+  }
+
+  private requireTask(taskId: string): TaskSnapshot {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new ApplicationError('NOT_FOUND');
+    return task;
   }
 
   private assertUniqueTagName(nameKey: string, exceptId?: string): void {

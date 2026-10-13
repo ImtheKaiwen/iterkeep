@@ -1,4 +1,9 @@
-import type { ActorRef, CommandContext } from '@iterkeep/domain';
+import {
+  canTransitionProject,
+  planTaskTransition,
+  type ActorRef,
+  type CommandContext,
+} from '@iterkeep/domain';
 import { ApplicationError } from './errors.js';
 import type {
   CoreRepositoryPort,
@@ -9,8 +14,10 @@ import type {
   DecisionSnapshot,
   DocumentSnapshot,
   ProjectSnapshot,
+  ProjectStatus,
   TagSnapshot,
   TaskSnapshot,
+  TaskStatus,
 } from './ports/core-repository.port.js';
 import type {
   ClockPort,
@@ -84,6 +91,21 @@ function slugFrom(name: string): string {
   return slug || 'project';
 }
 
+function normalizedDate(value: string | null): string | null {
+  if (value === null) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new ApplicationError('VALIDATION_FAILED');
+  }
+  return value;
+}
+
 function assertWritableProject(
   project: Awaited<ReturnType<CoreRepositoryPort['getProject']>>,
 ): asserts project is NonNullable<typeof project> {
@@ -147,6 +169,68 @@ export class ApplicationCore {
     });
   }
 
+  async updateProject(
+    input: {
+      projectId: string;
+      expectedRevision: number;
+      patch: { name?: string; description?: string; priority?: Priority };
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    const project = await this.ports.repository.getProject(input.projectId);
+    if (!project) throw new ApplicationError('NOT_FOUND');
+    if (project.kind === 'inbox') throw new ApplicationError('INBOX_PROTECTED');
+    assertWritableProject(project);
+    const patch = {
+      ...(input.patch.name === undefined
+        ? {}
+        : { name: normalizedRequired(input.patch.name, 120) }),
+      ...(input.patch.description === undefined
+        ? {}
+        : { description: normalizedMarkdown(input.patch.description, 2_000) }),
+      ...(input.patch.priority === undefined
+        ? {}
+        : { priority: input.patch.priority }),
+    };
+    if (Object.keys(patch).length === 0)
+      throw new ApplicationError('VALIDATION_FAILED');
+    const payload = { ...input, patch };
+    return this.ports.repository.updateProject({
+      projectId: input.projectId,
+      expectedRevision: input.expectedRevision,
+      patch,
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('projects.update', payload, commandContext),
+    });
+  }
+
+  async changeProjectStatus(
+    input: {
+      projectId: string;
+      expectedRevision: number;
+      status: ProjectStatus;
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    const project = await this.ports.repository.getProject(input.projectId);
+    if (!project) throw new ApplicationError('NOT_FOUND');
+    if (project.deletedAt !== null) throw new ApplicationError('NOT_FOUND');
+    if (!canTransitionProject(project.status, input.status, project.kind)) {
+      throw new ApplicationError(
+        project.kind === 'inbox'
+          ? 'INBOX_PROTECTED'
+          : 'INVALID_STATUS_TRANSITION',
+      );
+    }
+    return this.ports.repository.changeProjectStatus({
+      ...input,
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('projects.status', input, commandContext),
+    });
+  }
+
   async createTask(
     input: {
       projectId?: string;
@@ -168,7 +252,7 @@ export class ApplicationCore {
         2 * 1024 * 1024,
       ),
       priority: input.priority ?? 'none',
-      dueDate: input.dueDate ?? null,
+      dueDate: normalizedDate(input.dueDate ?? null),
     };
     return this.ports.repository.createTask({
       id: this.ports.ids.next(),
@@ -177,6 +261,128 @@ export class ApplicationCore {
       receiptId: this.ports.ids.next(),
       ...payload,
       context: this.context('tasks.create', payload, commandContext),
+    });
+  }
+
+  async updateTask(
+    input: {
+      taskId: string;
+      expectedRevision: number;
+      patch: {
+        title?: string;
+        bodyMarkdown?: string;
+        priority?: Priority;
+        dueDate?: string | null;
+        blockedReason?: string | null;
+      };
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    const patch = {
+      ...(input.patch.title === undefined
+        ? {}
+        : { title: normalizedRequired(input.patch.title, 300) }),
+      ...(input.patch.bodyMarkdown === undefined
+        ? {}
+        : {
+            bodyMarkdown: normalizedMarkdown(
+              input.patch.bodyMarkdown,
+              2 * 1024 * 1024,
+            ),
+          }),
+      ...(input.patch.priority === undefined
+        ? {}
+        : { priority: input.patch.priority }),
+      ...(input.patch.dueDate === undefined
+        ? {}
+        : { dueDate: normalizedDate(input.patch.dueDate) }),
+      ...(input.patch.blockedReason === undefined
+        ? {}
+        : {
+            blockedReason:
+              input.patch.blockedReason === null
+                ? null
+                : normalizedMarkdown(input.patch.blockedReason, 2_000),
+          }),
+    };
+    if (Object.keys(patch).length === 0)
+      throw new ApplicationError('VALIDATION_FAILED');
+    const payload = { ...input, patch };
+    return this.ports.repository.updateTask({
+      taskId: input.taskId,
+      expectedRevision: input.expectedRevision,
+      patch,
+      historyId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('tasks.update', payload, commandContext),
+    });
+  }
+
+  async changeTaskStatus(
+    input: {
+      taskId: string;
+      expectedRevision: number;
+      status: TaskStatus;
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    const task = await this.ports.repository.getTask(input.taskId);
+    if (!task || task.deletedAt !== null)
+      throw new ApplicationError('NOT_FOUND');
+    planTaskTransition(task.status, input.status);
+    return this.ports.repository.changeTaskStatus({
+      ...input,
+      historyId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('tasks.status', input, commandContext),
+    });
+  }
+
+  async moveTask(
+    input: {
+      taskId: string;
+      projectId: string;
+      expectedRevision: number;
+      status?: TaskStatus;
+      sortOrder?: number;
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    if (
+      input.sortOrder !== undefined &&
+      (!Number.isSafeInteger(input.sortOrder) || input.sortOrder < 0)
+    ) {
+      throw new ApplicationError('VALIDATION_FAILED');
+    }
+    assertWritableProject(
+      await this.ports.repository.getProject(input.projectId),
+    );
+    return this.ports.repository.moveTask({
+      ...input,
+      moveHistoryId: this.ports.ids.next(),
+      statusHistoryId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context('tasks.move', input, commandContext),
+    });
+  }
+
+  async setTaskDeleted(
+    input: { taskId: string; expectedRevision: number; deleted: boolean },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    return this.ports.repository.setTaskDeleted({
+      ...input,
+      historyId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context(
+        input.deleted ? 'tasks.trash' : 'tasks.restore',
+        input,
+        commandContext,
+      ),
     });
   }
 
@@ -232,6 +438,27 @@ export class ApplicationCore {
       receiptId: this.ports.ids.next(),
       ...payload,
       context: this.context('documents.save', payload, commandContext),
+    });
+  }
+
+  async setDocumentDeleted(
+    input: {
+      documentId: string;
+      expectedRevision: number;
+      deleted: boolean;
+    },
+    commandContext: CommandContext,
+  ): Promise<RevisionReceipt> {
+    return this.ports.repository.setDocumentDeleted({
+      ...input,
+      versionId: this.ports.ids.next(),
+      eventId: this.ports.ids.next(),
+      receiptId: this.ports.ids.next(),
+      context: this.context(
+        input.deleted ? 'documents.trash' : 'documents.restore',
+        input,
+        commandContext,
+      ),
     });
   }
 

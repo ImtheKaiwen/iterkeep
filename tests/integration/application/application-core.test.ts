@@ -182,6 +182,22 @@ for (const [name, createHarness] of [
             context('00000000-0000-4000-8000-000000000096'),
           ),
         ).rejects.toMatchObject({ code: 'CONFLICT_REVISION' });
+        expect(
+          await harness.core.setDocumentDeleted(
+            { documentId: document.id, expectedRevision: 2, deleted: true },
+            context('00000000-0000-4000-8000-000000000133'),
+          ),
+        ).toMatchObject({ revision: 3, changed: true });
+        expect(
+          await harness.core.setDocumentDeleted(
+            { documentId: document.id, expectedRevision: 3, deleted: false },
+            context('00000000-0000-4000-8000-000000000134'),
+          ),
+        ).toMatchObject({ revision: 4, changed: true });
+        expect(await harness.core.getDocument(document.id)).toMatchObject({
+          revision: 4,
+          deletedAt: null,
+        });
         if (harness.sqlite) {
           expect(
             harness.sqlite.db
@@ -190,7 +206,7 @@ for (const [name, createHarness] of [
                 { count: number }
               >('SELECT count(*) AS count FROM document_versions')
               .get()?.count,
-          ).toBe(2);
+          ).toBe(4);
         }
       } finally {
         await harness.close();
@@ -441,6 +457,158 @@ for (const [name, createHarness] of [
             context('00000000-0000-4000-8000-000000000118'),
           ),
         ).rejects.toMatchObject({ code: 'INVALID_STATUS_TRANSITION' });
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('updates projects with CAS and enforces the canonical status matrix', async () => {
+      const harness = await createHarness();
+      try {
+        const project = await harness.core.createProject(
+          { name: 'Mutable project' },
+          context('00000000-0000-4000-8000-000000000119'),
+        );
+        expect(
+          await harness.core.updateProject(
+            {
+              projectId: project.id,
+              expectedRevision: 1,
+              patch: { name: 'Renamed project', priority: 'high' },
+            },
+            context('00000000-0000-4000-8000-000000000120'),
+          ),
+        ).toMatchObject({ revision: 2, changed: true });
+        expect(
+          await harness.core.updateProject(
+            {
+              projectId: project.id,
+              expectedRevision: 2,
+              patch: { name: 'Renamed project', priority: 'high' },
+            },
+            context('00000000-0000-4000-8000-000000000121'),
+          ),
+        ).toMatchObject({ revision: 2, changed: false });
+        expect(
+          await harness.core.changeProjectStatus(
+            {
+              projectId: project.id,
+              expectedRevision: 2,
+              status: 'archived',
+            },
+            context('00000000-0000-4000-8000-000000000122'),
+          ),
+        ).toMatchObject({ revision: 3, changed: true });
+        await expect(
+          harness.core.changeProjectStatus(
+            {
+              projectId: project.id,
+              expectedRevision: 3,
+              status: 'completed',
+            },
+            context('00000000-0000-4000-8000-000000000123'),
+          ),
+        ).rejects.toMatchObject({ code: 'INVALID_STATUS_TRANSITION' });
+        expect(
+          await harness.core.changeProjectStatus(
+            {
+              projectId: project.id,
+              expectedRevision: 3,
+              status: 'active',
+            },
+            context('00000000-0000-4000-8000-000000000124'),
+          ),
+        ).toMatchObject({ revision: 4, changed: true });
+        expect(await harness.core.getProject(project.id)).toMatchObject({
+          name: 'Renamed project',
+          priority: 'high',
+          status: 'active',
+          revision: 4,
+        });
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it('updates, completes, reopens, moves, trashes and restores tasks', async () => {
+      const harness = await createHarness();
+      try {
+        const destination = await harness.core.createProject(
+          { name: 'Destination' },
+          context('00000000-0000-4000-8000-000000000125'),
+        );
+        const task = await harness.core.createTask(
+          { title: 'Lifecycle task' },
+          context('00000000-0000-4000-8000-000000000126'),
+        );
+        expect(
+          await harness.core.updateTask(
+            {
+              taskId: task.id,
+              expectedRevision: 1,
+              patch: { bodyMarkdown: 'Details', priority: 'urgent' },
+            },
+            context('00000000-0000-4000-8000-000000000127'),
+          ),
+        ).toMatchObject({ revision: 2, changed: true });
+        expect(
+          await harness.core.changeTaskStatus(
+            { taskId: task.id, expectedRevision: 2, status: 'done' },
+            context('00000000-0000-4000-8000-000000000128'),
+          ),
+        ).toMatchObject({ revision: 3, changed: true });
+        expect(await harness.core.getTask(task.id)).toMatchObject({
+          status: 'done',
+          completedAt: NOW,
+        });
+        await harness.core.changeTaskStatus(
+          { taskId: task.id, expectedRevision: 3, status: 'in_progress' },
+          context('00000000-0000-4000-8000-000000000129'),
+        );
+        expect(
+          await harness.core.moveTask(
+            {
+              taskId: task.id,
+              projectId: destination.id,
+              expectedRevision: 4,
+              status: 'blocked',
+              sortOrder: 5,
+            },
+            context('00000000-0000-4000-8000-000000000130'),
+          ),
+        ).toMatchObject({ revision: 5, changed: true });
+        expect(
+          await harness.core.setTaskDeleted(
+            { taskId: task.id, expectedRevision: 5, deleted: true },
+            context('00000000-0000-4000-8000-000000000131'),
+          ),
+        ).toMatchObject({ revision: 6, changed: true });
+        expect(
+          await harness.core.setTaskDeleted(
+            { taskId: task.id, expectedRevision: 6, deleted: false },
+            context('00000000-0000-4000-8000-000000000132'),
+          ),
+        ).toMatchObject({ revision: 7, changed: true });
+        expect(await harness.core.getTask(task.id)).toMatchObject({
+          projectId: destination.id,
+          bodyMarkdown: 'Details',
+          priority: 'urgent',
+          status: 'blocked',
+          completedAt: null,
+          sortOrder: 5,
+          revision: 7,
+          deletedAt: null,
+        });
+        if (harness.sqlite) {
+          expect(
+            harness.sqlite.db
+              .prepare<
+                [string],
+                { count: number }
+              >('SELECT count(*) AS count FROM task_history WHERE task_id=?')
+              .get(task.id)?.count,
+          ).toBe(8);
+        }
       } finally {
         await harness.close();
       }

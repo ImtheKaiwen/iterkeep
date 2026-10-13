@@ -1,6 +1,12 @@
 export type ActorKind = 'user' | 'agent' | 'import' | 'system';
 export type Priority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 export type ProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
+export type TaskStatus =
+  | 'todo'
+  | 'in_progress'
+  | 'blocked'
+  | 'done'
+  | 'cancelled';
 export type DecisionStatus =
   | 'proposed'
   | 'accepted'
@@ -33,7 +39,9 @@ export interface ProjectSnapshot {
   readonly workspaceId: string;
   readonly kind: 'user' | 'inbox';
   readonly name: string;
+  readonly description: string;
   readonly status: ProjectStatus;
+  readonly priority: Priority;
   readonly revision: number;
   readonly deletedAt: string | null;
 }
@@ -53,7 +61,13 @@ export interface TaskSnapshot {
   readonly id: string;
   readonly projectId: string;
   readonly title: string;
-  readonly status: string;
+  readonly bodyMarkdown: string;
+  readonly status: TaskStatus;
+  readonly priority: Priority;
+  readonly dueDate: string | null;
+  readonly completedAt: string | null;
+  readonly sortOrder: number;
+  readonly blockedReason: string | null;
   readonly revision: number;
   readonly deletedAt: string | null;
 }
@@ -103,6 +117,24 @@ export interface CoreRepositoryPort {
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
+  updateProject(input: {
+    projectId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    patch: { name?: string; description?: string; priority?: Priority };
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  changeProjectStatus(input: {
+    projectId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    status: ProjectStatus;
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
   createTask(input: {
     id: string;
     historyId: string;
@@ -113,6 +145,55 @@ export interface CoreRepositoryPort {
     bodyMarkdown: string;
     priority: Priority;
     dueDate: string | null;
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  updateTask(input: {
+    taskId: string;
+    historyId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    patch: {
+      title?: string;
+      bodyMarkdown?: string;
+      priority?: Priority;
+      dueDate?: string | null;
+      blockedReason?: string | null;
+    };
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  changeTaskStatus(input: {
+    taskId: string;
+    historyId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    status: TaskSnapshot['status'];
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  moveTask(input: {
+    taskId: string;
+    moveHistoryId: string;
+    statusHistoryId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    projectId: string;
+    status?: TaskSnapshot['status'];
+    sortOrder?: number;
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  setTaskDeleted(input: {
+    taskId: string;
+    historyId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    deleted: boolean;
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
@@ -137,6 +218,16 @@ export interface CoreRepositoryPort {
     title: string;
     bodyMarkdown: string;
     pinned: boolean;
+    context: PersistenceContext;
+  }): Promise<RevisionReceipt>;
+
+  setDocumentDeleted(input: {
+    documentId: string;
+    versionId: string;
+    eventId: string;
+    receiptId: string;
+    expectedRevision: number;
+    deleted: boolean;
     context: PersistenceContext;
   }): Promise<RevisionReceipt>;
 
